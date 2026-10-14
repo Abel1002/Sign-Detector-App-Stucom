@@ -1,0 +1,30 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Caché Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Artefactos de entrenamiento y datos pesados
+data/
+datasets/
+dataset/
+*.zip
+*.tar
+*.gz
+
+# Sistema operativo / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Variables de entorno
+.env
+
+# Documentación interna de planificación
+plan_de_proyecto_digit_detector.md

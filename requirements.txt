@@ -1,0 +1,7 @@
+streamlit>=1.39.0
+streamlit-drawable-canvas>=0.9.3
+scikit-learn>=1.5.0
+numpy>=1.26.0
+Pillow>=10.4.0
+kagglehub>=1.0.0
+joblib>=1.4.0
