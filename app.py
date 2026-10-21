@@ -1,12 +1,12 @@
 """
-App educativa para clasificar dígitos escritos (0..9) con 5 modelos:
-1) Árbol de Decisión
-2) Random Forest
-3) MLP básica
-4) MLP tratada (Solución 1: Max Pooling)
-5) MLP tratada (Solución 3: Atención espacial)
+App de inferencia y comparativa de modelos para dígitos 0..9.
 
-Entrada de usuario: solo subida de imagen (sin lienzo).
+Modelos disponibles:
+- Árbol de Decisión
+- Random Forest
+- MLP básica
+- CNN Solución 1 (Global Max Pooling real sobre mapas convolucionales)
+- MLP Solución 3 (Atención espacial dinámica)
 """
 
 from __future__ import annotations
@@ -16,7 +16,10 @@ from pathlib import Path
 import joblib
 import numpy as np
 import streamlit as st
+import torch
+import torch.nn as nn
 from PIL import Image, ImageOps
+from torchvision import models, transforms
 
 MODEL_PATH = Path("modelo.joblib")
 
@@ -24,14 +27,34 @@ MODEL_REGISTRY = {
     "Árbol de Decisión": "decision_tree",
     "Random Forest": "random_forest",
     "MLP básica": "mlp_basic",
-    "MLP tratada (Solución 1: Max Pooling)": "mlp_sol1_maxpool",
+    "CNN tratada (Solución 1: Global Max Pooling)": "cnn_sol1_global_maxpool",
     "MLP tratada (Solución 3: Atención espacial)": "mlp_sol3_attention",
 }
 
 
+class MobileNetV2GlobalMaxPool(nn.Module):
+    """Definición de arquitectura CNN usada por la Solución 1."""
+
+    def __init__(self, num_classes: int = 10) -> None:
+        super().__init__()
+        base = models.mobilenet_v2(weights=None)
+        self.features = base.features
+        self.global_max_pool = nn.AdaptiveMaxPool2d((1, 1))
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=0.2),
+            nn.Linear(1280, num_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.global_max_pool(x)
+        x = torch.flatten(x, 1)
+        return self.classifier(x)
+
+
 @st.cache_resource
 def load_artifact(model_path: Path) -> dict:
-    """Carga el artefacto de modelos y valida su estructura base."""
+    """Carga artefacto de entrenamiento."""
     artifact = joblib.load(model_path)
     expected_keys = {"decision_tree", "random_forest", "metadata"}
     missing_keys = expected_keys.difference(artifact.keys())
@@ -40,43 +63,28 @@ def load_artifact(model_path: Path) -> dict:
     return artifact
 
 
+@st.cache_resource
+def load_cnn_model_from_artifact(artifact: dict):
+    """Reconstruye CNN Solución 1 desde state_dict guardado."""
+    if "cnn_sol1_global_maxpool_state_dict" not in artifact:
+        return None
+    config = artifact.get("cnn_sol1_global_maxpool_config", {})
+    model = MobileNetV2GlobalMaxPool(num_classes=int(config.get("num_classes", 10)))
+    model.load_state_dict(artifact["cnn_sol1_global_maxpool_state_dict"], strict=True)
+    model.eval()
+    return model
+
+
 def preprocess_pil_image(input_image: Image.Image, image_size: int) -> tuple[Image.Image, np.ndarray]:
-    """
-    Preprocesado compartido entre entrenamiento e inferencia:
-    - gris
-    - resize
-    - normalización [0, 1]
-    - flatten 1D
-    """
+    """Preprocesado tabular para Árbol/RF/MLPs (gris + resize + flatten)."""
     grayscale = ImageOps.grayscale(input_image)
     resized = grayscale.resize((image_size, image_size))
     image_array = np.asarray(resized, dtype=np.float32) / 255.0
-    feature_vector = image_array.reshape(1, -1)
-    return resized, feature_vector
-
-
-def predict_with_probabilities(model, vector: np.ndarray) -> tuple[int, float, np.ndarray, list[int]]:
-    """Predicción de clase + confianza + distribución completa de probabilidad."""
-    probabilities = model.predict_proba(vector)[0]
-    model_classes = [int(value) for value in model.classes_]
-    predicted_label = int(model.predict(vector)[0])
-    predicted_index = model_classes.index(predicted_label)
-    confidence = float(probabilities[predicted_index])
-    return predicted_label, confidence, probabilities, model_classes
-
-
-def build_global_maxpool_features(vector: np.ndarray, image_size: int) -> np.ndarray:
-    """Replica en inferencia la Solución 1 (max pooling espacial 2x2)."""
-    if image_size < 2:
-        return vector
-    even_size = image_size if image_size % 2 == 0 else image_size - 1
-    image = vector.reshape(1, image_size, image_size)[:, :even_size, :even_size]
-    pooled = image.reshape(1, even_size // 2, 2, even_size // 2, 2).max(axis=(2, 4))
-    return pooled.reshape(1, -1)
+    return resized, image_array.reshape(1, -1)
 
 
 def build_attention_features(vector: np.ndarray, image_size: int) -> np.ndarray:
-    """Replica en inferencia la Solución 3 (máscara de atención espacial)."""
+    """Transformación de Solución 3 para MLP de atención espacial."""
     image = vector.reshape(image_size, image_size)
     min_value = float(image.min())
     max_value = float(image.max())
@@ -87,8 +95,43 @@ def build_attention_features(vector: np.ndarray, image_size: int) -> np.ndarray:
     return weighted.reshape(1, -1)
 
 
+def build_cnn_input(pil_image: Image.Image, cnn_image_size: int) -> torch.Tensor:
+    """Preprocesado CNN (128x128 + 3 canales + normalización ImageNet)."""
+    transform_eval = transforms.Compose(
+        [
+            transforms.Resize((cnn_image_size, cnn_image_size)),
+            transforms.Grayscale(num_output_channels=3),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+    tensor = transform_eval(pil_image.convert("RGB")).unsqueeze(0)
+    return tensor
+
+
+def predict_with_probabilities(model, vector: np.ndarray) -> tuple[int, float, np.ndarray, list[int]]:
+    """Predicción para modelos scikit-learn (clase + confianza + distribución)."""
+    probabilities = model.predict_proba(vector)[0]
+    model_classes = [int(value) for value in model.classes_]
+    predicted_label = int(model.predict(vector)[0])
+    predicted_index = model_classes.index(predicted_label)
+    confidence = float(probabilities[predicted_index])
+    return predicted_label, confidence, probabilities, model_classes
+
+
+def predict_cnn_with_probabilities(model: nn.Module, tensor_input: torch.Tensor, class_labels: list[int]):
+    """Predicción para CNN en PyTorch usando softmax."""
+    with torch.no_grad():
+        logits = model(tensor_input)
+        probabilities = torch.softmax(logits, dim=1).cpu().numpy()[0]
+    predicted_index = int(np.argmax(probabilities))
+    predicted_label = class_labels[predicted_index]
+    confidence = float(probabilities[predicted_index])
+    return predicted_label, confidence, probabilities, class_labels
+
+
 def get_forest_votes(random_forest, vector: np.ndarray, class_labels: list[int]) -> np.ndarray:
-    """Cuenta cuántos árboles del bosque votan cada clase."""
+    """Cuenta votos por clase en Random Forest."""
     label_to_index = {label: idx for idx, label in enumerate(class_labels)}
     vote_counts = np.zeros(len(class_labels), dtype=np.int32)
     for estimator in random_forest.estimators_:
@@ -98,27 +141,30 @@ def get_forest_votes(random_forest, vector: np.ndarray, class_labels: list[int])
     return vote_counts
 
 
-def render_model_block(
-    model_display_name: str,
+def render_model_result(
+    display_name: str,
     model_key: str,
-    model,
-    model_input: np.ndarray,
+    predicted_label: int,
+    confidence: float,
+    probabilities: np.ndarray,
+    model_classes: list[int],
+    artifact: dict,
+    model_input_base: np.ndarray,
     class_labels: list[int],
-) -> tuple[int, float]:
-    """Muestra salida visual de un modelo y devuelve predicción/confianza."""
-    predicted_label, confidence, probabilities, model_classes = predict_with_probabilities(model, model_input)
-    st.markdown(f"### {model_display_name}")
+) -> None:
+    """Muestra salida visual de un modelo."""
+    st.markdown(f"### {display_name}")
     st.success(f"Predicción: **{predicted_label}**")
     st.write(f"Confianza estimada: **{confidence:.2%}**")
 
-    probability_chart_data = {
+    chart_data = {
         "Dígito": [str(label) for label in model_classes],
         "Probabilidad": [float(value) for value in probabilities],
     }
-    st.bar_chart(probability_chart_data, x="Dígito", y="Probabilidad", use_container_width=True)
+    st.bar_chart(chart_data, x="Dígito", y="Probabilidad", use_container_width=True)
 
     if model_key == "random_forest":
-        vote_counts = get_forest_votes(model, model_input, class_labels=class_labels)
+        vote_counts = get_forest_votes(artifact["random_forest"], model_input_base, class_labels=class_labels)
         vote_chart_data = {
             "Dígito": [str(label) for label in class_labels],
             "Votos": [int(count) for count in vote_counts],
@@ -127,46 +173,58 @@ def render_model_block(
         st.bar_chart(vote_chart_data, x="Dígito", y="Votos", use_container_width=True)
         st.caption(f"Votos totales emitidos: {int(vote_counts.sum())}")
 
-    return predicted_label, confidence
-
 
 def render_predictions(
     selected_model_names: list[str],
     artifact: dict,
+    cnn_model: nn.Module | None,
     model_input_base: np.ndarray,
+    original_pil_image: Image.Image,
     image_size: int,
+    cnn_image_size: int,
     class_labels: list[int],
 ) -> None:
-    """Ejecuta todos los modelos seleccionados y renderiza comparativa."""
+    """Ejecuta y compara todos los modelos seleccionados."""
     st.subheader("Predicciones de los modelos seleccionados")
     comparison_rows = []
 
     for display_name in selected_model_names:
         model_key = MODEL_REGISTRY[display_name]
-        if model_key not in artifact:
-            st.warning(
-                f"El modelo '{display_name}' no existe en `modelo.joblib`. "
-                "Reentrena con `python train.py` para incluir los modelos actuales."
-            )
-            continue
 
-        model = artifact[model_key]
-        # Selección de representación de entrada según el modelo neuronal.
-        if model_key == "mlp_sol1_maxpool":
-            model_input = build_global_maxpool_features(model_input_base, image_size=image_size)
-        elif model_key == "mlp_sol3_attention":
-            model_input = build_attention_features(model_input_base, image_size=image_size)
-        else:
-            model_input = model_input_base
-
-        with st.container(border=True):
-            predicted_label, confidence = render_model_block(
-                model_display_name=display_name,
-                model_key=model_key,
-                model=model,
-                model_input=model_input,
+        if model_key == "cnn_sol1_global_maxpool":
+            if cnn_model is None:
+                st.warning("No se encontró la CNN Solución 1 en el artefacto. Reentrena con `python train.py`.")
+                continue
+            cnn_input = build_cnn_input(original_pil_image, cnn_image_size=cnn_image_size)
+            predicted_label, confidence, probabilities, model_classes = predict_cnn_with_probabilities(
+                cnn_model,
+                cnn_input,
                 class_labels=class_labels,
             )
+        else:
+            if model_key not in artifact:
+                st.warning(f"Modelo ausente: {display_name}. Reentrena con `python train.py`.")
+                continue
+            model = artifact[model_key]
+            if model_key == "mlp_sol3_attention":
+                model_input = build_attention_features(model_input_base, image_size=image_size)
+            else:
+                model_input = model_input_base
+            predicted_label, confidence, probabilities, model_classes = predict_with_probabilities(model, model_input)
+
+        with st.container(border=True):
+            render_model_result(
+                display_name=display_name,
+                model_key=model_key,
+                predicted_label=predicted_label,
+                confidence=confidence,
+                probabilities=probabilities,
+                model_classes=model_classes,
+                artifact=artifact,
+                model_input_base=model_input_base,
+                class_labels=class_labels,
+            )
+
         comparison_rows.append(
             {
                 "Modelo": display_name,
@@ -180,71 +238,66 @@ def render_predictions(
         st.dataframe(comparison_rows, use_container_width=True, hide_index=True)
 
 
-st.set_page_config(
-    page_title="Digit Detector App (5 modelos)",
-    page_icon="🔢",
-    layout="wide",
-)
+st.set_page_config(page_title="Digit Detector App", page_icon="🔢", layout="wide")
 
 st.title("🔢 Detector de números escritos (0..9)")
-st.caption("Comparativa educativa de 5 modelos con selección libre (1 a 5 modelos).")
+st.caption("Comparativa educativa de modelos clásicos + 3 redes neuronales.")
 
 if not MODEL_PATH.exists():
-    st.error(
-        "No se encontró `modelo.joblib`. "
-        "Ejecuta `python train.py` para entrenar y generar el artefacto."
-    )
+    st.error("No se encontró `modelo.joblib`. Ejecuta `python train.py`.")
     st.stop()
 
 try:
     artifact = load_artifact(MODEL_PATH)
 except FileNotFoundError:
-    st.error("No se pudo abrir el archivo `modelo.joblib`.")
+    st.error("No se pudo abrir `modelo.joblib`.")
     st.stop()
 except KeyError as error:
     st.error(f"Formato de modelo inválido: {error}")
     st.stop()
 
+cnn_model = load_cnn_model_from_artifact(artifact)
+
 metadata = artifact["metadata"]
 image_size = int(metadata["image_size"])
+cnn_image_size = int(metadata.get("cnn_image_size", 128))
 class_labels = [int(label) for label in metadata["class_labels"]]
 metrics = metadata.get("metrics", {})
 
-with st.expander("📘 Conceptos de ML usados", expanded=False):
+with st.expander("📘 Resumen de soluciones", expanded=False):
     st.markdown(
         """
-        - **Árbol de Decisión:** modelo base simple e interpretable.
-        - **Random Forest:** ensamble por voto mayoritario con bootstrapping.
-        - **MLP básica:** baseline neuronal para comparar contra clásicos.
-        - **MLP Solución 1:** usa max pooling espacial para ser menos sensible al desplazamiento.
-        - **MLP Solución 3:** usa ponderación espacial dinámica del trazo.
-        - **Mismo preprocesado para todos:** comparación justa entre modelos.
+        - **Solución 1 (real):** CNN con **Global Max Pooling** en mapas convolucionales.
+        - **Solución 3:** atención espacial dinámica sobre entrada tabular de la MLP.
+        - **Mismos datos y etiquetas:** comparación justa entre enfoques.
         """
     )
 
-metric_columns = st.columns(4)
+metric_columns = st.columns(5)
 metric_columns[0].metric("Acc Árbol", f"{metrics.get('decision_tree', {}).get('accuracy', 0.0):.3f}")
 metric_columns[1].metric("Acc Bosque", f"{metrics.get('random_forest', {}).get('accuracy', 0.0):.3f}")
 metric_columns[2].metric("Acc MLP básica", f"{metrics.get('mlp_basic', {}).get('accuracy', 0.0):.3f}")
 metric_columns[3].metric(
+    "Acc CNN Solución 1",
+    f"{metrics.get('cnn_sol1_global_maxpool', {}).get('accuracy', 0.0):.3f}",
+)
+metric_columns[4].metric(
     "Acc MLP Solución 3",
     f"{metrics.get('mlp_sol3_attention', {}).get('accuracy', 0.0):.3f}",
 )
-st.caption(f"Acc MLP Solución 1: {metrics.get('mlp_sol1_maxpool', {}).get('accuracy', 0.0):.3f}")
 
 if "oob_score" in metrics.get("random_forest", {}):
     st.caption(f"OOB Random Forest: {metrics['random_forest']['oob_score']:.3f}")
 
-st.sidebar.header("⚙️ Configuración de inferencia")
 selected_model_names = st.sidebar.multiselect(
     "Selecciona 1 a 5 modelos para ejecutar:",
     options=list(MODEL_REGISTRY.keys()),
-    default=["Árbol de Decisión", "Random Forest", "MLP básica"],
+    default=["Árbol de Decisión", "Random Forest", "CNN tratada (Solución 1: Global Max Pooling)"],
     max_selections=5,
 )
 
 if not selected_model_names:
-    st.warning("Selecciona al menos un modelo para ejecutar inferencia.")
+    st.warning("Selecciona al menos un modelo.")
     st.stop()
 
 uploaded_file = st.file_uploader("Sube una imagen de un número (JPG/PNG)", type=["jpg", "jpeg", "png"])
@@ -252,15 +305,15 @@ uploaded_file = st.file_uploader("Sube una imagen de un número (JPG/PNG)", type
 if uploaded_file is not None:
     with Image.open(uploaded_file) as uploaded_img:
         original_uploaded = uploaded_img.convert("RGB")
-    processed_image, model_input = preprocess_pil_image(original_uploaded, image_size=image_size)
+    processed_image, model_input_base = preprocess_pil_image(original_uploaded, image_size=image_size)
 
-    col_left, col_right = st.columns([1, 1.4])
+    col_left, col_right = st.columns([1, 1.5])
     with col_left:
         st.subheader("Imagen de entrada")
         st.image(original_uploaded, caption="Original", use_container_width=True)
         st.image(
             processed_image,
-            caption=f"Procesada para inferencia ({image_size}x{image_size}, gris)",
+            caption=f"Preprocesada tabular ({image_size}x{image_size}, gris)",
             use_container_width=True,
         )
 
@@ -268,9 +321,12 @@ if uploaded_file is not None:
         render_predictions(
             selected_model_names=selected_model_names,
             artifact=artifact,
-            model_input_base=model_input,
+            cnn_model=cnn_model,
+            model_input_base=model_input_base,
+            original_pil_image=original_uploaded,
             image_size=image_size,
+            cnn_image_size=cnn_image_size,
             class_labels=class_labels,
         )
 else:
-    st.info("Sube una imagen para ejecutar la predicción con los modelos seleccionados.")
+    st.info("Sube una imagen para ejecutar la inferencia.")
