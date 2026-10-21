@@ -1,11 +1,12 @@
 """
-App educativa para clasificar dígitos escritos (0..9) con 4 modelos:
+App educativa para clasificar dígitos escritos (0..9) con 5 modelos:
 1) Árbol de Decisión
 2) Random Forest
-3) Red Neuronal MLP pequeña
-4) Red Neuronal MLP profunda
+3) MLP básica
+4) MLP tratada (Solución 1: Max Pooling)
+5) MLP tratada (Solución 3: Atención espacial)
 
-Nota: en esta versión la entrada es solo por subida de imagen (sin lienzo).
+Entrada de usuario: solo subida de imagen (sin lienzo).
 """
 
 from __future__ import annotations
@@ -22,8 +23,9 @@ MODEL_PATH = Path("modelo.joblib")
 MODEL_REGISTRY = {
     "Árbol de Decisión": "decision_tree",
     "Random Forest": "random_forest",
-    "MLP pequeña (1 capa oculta)": "mlp_small",
-    "MLP profunda (2 capas ocultas)": "mlp_deep",
+    "MLP básica": "mlp_basic",
+    "MLP tratada (Solución 1: Max Pooling)": "mlp_sol1_maxpool",
+    "MLP tratada (Solución 3: Atención espacial)": "mlp_sol3_attention",
 }
 
 
@@ -61,6 +63,28 @@ def predict_with_probabilities(model, vector: np.ndarray) -> tuple[int, float, n
     predicted_index = model_classes.index(predicted_label)
     confidence = float(probabilities[predicted_index])
     return predicted_label, confidence, probabilities, model_classes
+
+
+def build_global_maxpool_features(vector: np.ndarray, image_size: int) -> np.ndarray:
+    """Replica en inferencia la Solución 1 (max pooling espacial 2x2)."""
+    if image_size < 2:
+        return vector
+    even_size = image_size if image_size % 2 == 0 else image_size - 1
+    image = vector.reshape(1, image_size, image_size)[:, :even_size, :even_size]
+    pooled = image.reshape(1, even_size // 2, 2, even_size // 2, 2).max(axis=(2, 4))
+    return pooled.reshape(1, -1)
+
+
+def build_attention_features(vector: np.ndarray, image_size: int) -> np.ndarray:
+    """Replica en inferencia la Solución 3 (máscara de atención espacial)."""
+    image = vector.reshape(image_size, image_size)
+    min_value = float(image.min())
+    max_value = float(image.max())
+    dynamic_range = max(max_value - min_value, 1e-6)
+    normalized = (image - min_value) / dynamic_range
+    attention_mask = 0.25 + 0.75 * normalized
+    weighted = image * attention_mask
+    return weighted.reshape(1, -1)
 
 
 def get_forest_votes(random_forest, vector: np.ndarray, class_labels: list[int]) -> np.ndarray:
@@ -109,7 +133,8 @@ def render_model_block(
 def render_predictions(
     selected_model_names: list[str],
     artifact: dict,
-    model_input: np.ndarray,
+    model_input_base: np.ndarray,
+    image_size: int,
     class_labels: list[int],
 ) -> None:
     """Ejecuta todos los modelos seleccionados y renderiza comparativa."""
@@ -121,11 +146,19 @@ def render_predictions(
         if model_key not in artifact:
             st.warning(
                 f"El modelo '{display_name}' no existe en `modelo.joblib`. "
-                "Reentrena con `python train.py` para incluir los 4 modelos."
+                "Reentrena con `python train.py` para incluir los modelos actuales."
             )
             continue
 
         model = artifact[model_key]
+        # Selección de representación de entrada según el modelo neuronal.
+        if model_key == "mlp_sol1_maxpool":
+            model_input = build_global_maxpool_features(model_input_base, image_size=image_size)
+        elif model_key == "mlp_sol3_attention":
+            model_input = build_attention_features(model_input_base, image_size=image_size)
+        else:
+            model_input = model_input_base
+
         with st.container(border=True):
             predicted_label, confidence = render_model_block(
                 model_display_name=display_name,
@@ -148,13 +181,13 @@ def render_predictions(
 
 
 st.set_page_config(
-    page_title="Digit Detector App (4 modelos)",
+    page_title="Digit Detector App (5 modelos)",
     page_icon="🔢",
     layout="wide",
 )
 
 st.title("🔢 Detector de números escritos (0..9)")
-st.caption("Comparativa educativa de 4 modelos con selección libre (1 a 4 modelos).")
+st.caption("Comparativa educativa de 5 modelos con selección libre (1 a 5 modelos).")
 
 if not MODEL_PATH.exists():
     st.error(
@@ -182,8 +215,9 @@ with st.expander("📘 Conceptos de ML usados", expanded=False):
         """
         - **Árbol de Decisión:** modelo base simple e interpretable.
         - **Random Forest:** ensamble por voto mayoritario con bootstrapping.
-        - **MLP pequeña:** red neuronal compacta para baseline no lineal.
-        - **MLP profunda:** red con más capacidad representacional.
+        - **MLP básica:** baseline neuronal para comparar contra clásicos.
+        - **MLP Solución 1:** usa max pooling espacial para ser menos sensible al desplazamiento.
+        - **MLP Solución 3:** usa ponderación espacial dinámica del trazo.
         - **Mismo preprocesado para todos:** comparación justa entre modelos.
         """
     )
@@ -191,18 +225,22 @@ with st.expander("📘 Conceptos de ML usados", expanded=False):
 metric_columns = st.columns(4)
 metric_columns[0].metric("Acc Árbol", f"{metrics.get('decision_tree', {}).get('accuracy', 0.0):.3f}")
 metric_columns[1].metric("Acc Bosque", f"{metrics.get('random_forest', {}).get('accuracy', 0.0):.3f}")
-metric_columns[2].metric("Acc MLP pequeña", f"{metrics.get('mlp_small', {}).get('accuracy', 0.0):.3f}")
-metric_columns[3].metric("Acc MLP profunda", f"{metrics.get('mlp_deep', {}).get('accuracy', 0.0):.3f}")
+metric_columns[2].metric("Acc MLP básica", f"{metrics.get('mlp_basic', {}).get('accuracy', 0.0):.3f}")
+metric_columns[3].metric(
+    "Acc MLP Solución 3",
+    f"{metrics.get('mlp_sol3_attention', {}).get('accuracy', 0.0):.3f}",
+)
+st.caption(f"Acc MLP Solución 1: {metrics.get('mlp_sol1_maxpool', {}).get('accuracy', 0.0):.3f}")
 
 if "oob_score" in metrics.get("random_forest", {}):
     st.caption(f"OOB Random Forest: {metrics['random_forest']['oob_score']:.3f}")
 
 st.sidebar.header("⚙️ Configuración de inferencia")
 selected_model_names = st.sidebar.multiselect(
-    "Selecciona 1 a 4 modelos para ejecutar:",
+    "Selecciona 1 a 5 modelos para ejecutar:",
     options=list(MODEL_REGISTRY.keys()),
-    default=["Árbol de Decisión", "Random Forest"],
-    max_selections=4,
+    default=["Árbol de Decisión", "Random Forest", "MLP básica"],
+    max_selections=5,
 )
 
 if not selected_model_names:
@@ -230,7 +268,8 @@ if uploaded_file is not None:
         render_predictions(
             selected_model_names=selected_model_names,
             artifact=artifact,
-            model_input=model_input,
+            model_input_base=model_input,
+            image_size=image_size,
             class_labels=class_labels,
         )
 else:

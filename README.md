@@ -1,17 +1,23 @@
-# Digit Detector App (4 modelos)
+# Sign Detector App Stucom
 
-Proyecto educativo para clasificar números escritos (0..9) con **4 modelos**:
+Proyecto educativo para clasificar números escritos (0..9) con comparación de modelos clásicos y redes neuronales.
 
+## Modelos disponibles
+
+### Modelos clásicos
 1. Árbol de Decisión
 2. Random Forest
-3. Red neuronal MLP pequeña
-4. Red neuronal MLP profunda
 
-La app en Streamlit permite seleccionar y comparar **1, 2, 3 o 4 modelos** en la misma inferencia.
+### Redes neuronales (3 en total)
+3. **MLP básica** (baseline)
+4. **MLP tratada - Solución 1**: reducción espacial por **Global Max Pooling** previo
+5. **MLP tratada - Solución 3**: **Atención espacial dinámica** previa
+
+En la app puedes ejecutar cualquier combinación de **1 a 5 modelos**.
 
 ---
 
-## 1) Estructura del proyecto
+## 1) Estructura
 
 ```text
 SignDetectorApp/
@@ -21,15 +27,14 @@ SignDetectorApp/
 ├── requirements.txt
 ├── .gitignore
 ├── render.yaml
-├── README.md
-└── dataset/            # opcional (si quieres entrenar desde ruta local)
+└── README.md
 ```
 
 ---
 
-## 2) Dataset usado
+## 2) Dataset
 
-Por defecto se descarga automáticamente:
+Por defecto se usa:
 
 ```python
 import kagglehub
@@ -37,103 +42,121 @@ path = kagglehub.dataset_download("karnikakapoor/digits")
 print(path)
 ```
 
-También puedes usar un dataset local con carpetas `0..9`.
+También puedes entrenar con ruta local por carpetas (`0/`, `1/`, ... `9/`).
 
 ---
 
-## 3) Preprocesado de imágenes (igual para los 4 modelos)
+## 3) Preprocesado base
 
-Pipeline en [train.py](C:/Users/abel.perez/Desktop/ML/SignDetectorApp/train.py) y [app.py](C:/Users/abel.perez/Desktop/ML/SignDetectorApp/app.py):
+Todos los modelos parten del mismo preprocesado:
 
-1. Convertir a escala de grises.
-2. Redimensionar a `image_size x image_size` (por defecto `28x28`).
-3. Normalizar píxeles a rango `[0, 1]`.
-4. Aplanar (flatten) a vector 1D.
+1. Escala de grises.
+2. Reducción de resolución (`image_size`, por defecto 28x28).
+3. Normalización `[0, 1]`.
+4. Flatten a vector tabular.
 
-Con `28x28`, cada imagen pasa a 784 features.
+Así comparamos modelos de forma justa.
 
 ---
 
-## 4) Modelos y parámetros usados
+## 4) Redes neuronales creadas y por qué
 
-## 4.1 Árbol de Decisión
+## 4.1 MLP básica
 
-- `criterion="gini"`: minimiza impureza de clases en cada split.
-- `max_depth=18`: limita profundidad para reducir sobreajuste.
-- `min_samples_leaf=2`: evita hojas demasiado pequeñas.
-- `random_state=42`: reproducibilidad.
-
-## 4.2 Random Forest
-
-- `n_estimators=140`: cantidad de árboles.
-- `criterion="gini"`: mismo criterio de split.
-- `max_depth=22`: profundidad por árbol.
-- `max_features="sqrt"`: feature bagging por split.
-- `bootstrap=True`: muestreo con reemplazo.
-- `oob_score=True`: estimación interna de generalización.
-- `n_jobs=-1`: usa todos los cores.
-- `random_state=42`: reproducibilidad.
-
-## 4.3 Red neuronal MLP pequeña
-
-- `hidden_layer_sizes=(128,)`: 1 capa oculta de 128 neuronas.
-- `activation="relu"`: activación estándar en MLP modernas.
-- `solver="adam"`: optimizador adaptativo.
-- `alpha=1e-4`: regularización L2.
-- `learning_rate_init=1e-3`: tasa inicial.
-- `max_iter=60`: iteraciones máximas.
-- `early_stopping=True`: para evitar sobreentrenamiento.
-- `n_iter_no_change=8`: paciencia de parada.
-
-## 4.4 Red neuronal MLP profunda
-
-- `hidden_layer_sizes=(256, 128)`: 2 capas ocultas.
+Configuración principal:
+- `hidden_layer_sizes=(128,)`
 - `activation="relu"`
 - `solver="adam"`
-- `alpha=5e-4`: regularización más fuerte.
-- `learning_rate_init=8e-4`: paso algo más conservador.
-- `max_iter=80`
+- `alpha=1e-4`
+- `learning_rate_init=1e-3`
+- `max_iter=60`
 - `early_stopping=True`
-- `n_iter_no_change=10`
+
+Qué hace:
+- Es la red de referencia para ver cómo se comporta una MLP simple cuando el número se desplaza.
+
+## 4.2 MLP tratada - Solución 1 (Global Max Pooling previo)
+
+Qué hace:
+- Antes de la red, se aplica un pooling espacial 2x2 por máximo.
+- Esto favorece capturar picos de activación del trazo aunque el dígito no esté centrado.
+
+Resultado práctico:
+- Menor sensibilidad a que el número esté desplazado en el lienzo/imagen.
+
+## 4.3 MLP tratada - Solución 3 (Atención espacial dinámica previa)
+
+Qué hace:
+- Se calcula una máscara espacial por imagen que da más peso al trazo y menos al fondo.
+- Luego la red recibe la imagen ponderada.
+
+Resultado práctico:
+- La red aprende a focalizarse en zonas informativas en vez de depender tanto de posición absoluta.
 
 ---
 
 ## 5) ¿Por qué usamos `solver="adam"`?
 
-En este proyecto, Adam se eligió porque:
+Usamos Adam porque:
+- converge de forma estable sin mucha calibración manual;
+- se comporta bien en problemas no lineales con ruido;
+- es una opción práctica en contexto educativo.
 
-- funciona bien con datos ruidosos y no lineales;
-- suele converger más rápido y de forma más estable que SGD sin tuning complejo;
-- es una opción segura para alumnos en primeras prácticas.
-
-### Alternativas válidas para problemas parecidos
+### Alternativas que podrían funcionar
 
 - `solver="sgd"`:
-  - más control fino (momentum, schedules),
-  - útil en experimentación avanzada de aprendizaje.
+  - más control (momentum, schedules), útil para cursos avanzados.
 - `solver="lbfgs"`:
-  - puede ir muy bien en datasets pequeños,
-  - pero escala peor cuando crecen datos/parámetros.
+  - bueno en datasets pequeños, pero menos escalable.
 
 ---
 
-## 6) Si en vez de imágenes clasificamos texto
+## 6) ¿Y si el problema fuera texto en vez de imagen?
 
-### En enfoque clásico (rápido y robusto):
-
+### En enfoque clásico
 - TF-IDF + Logistic Regression
 - TF-IDF + Linear SVM
 - TF-IDF + Naive Bayes
 
-### En deep learning:
-
+### En deep learning
 - Embeddings + LSTM/GRU
-- Transformers (BERT-like) + fine-tuning
-- Optimizador habitual: AdamW (especialmente en Transformers)
+- Transformers (BERT-like)
+- Optimizador típico: AdamW
 
 ---
 
-## 7) Entrenamiento
+## 7) Soluciones Alternativas a "DL"
+
+Estas opciones **no se aplicaron en esta implementación** porque el objetivo era practicar más sobre modelo y representación, pero eso **no significa que sean peores ni mejores**: depende del contexto.
+
+### Opción 1: Centrar el número antes de predecir (parche en la entrada)
+
+Idea:
+1. Detectar dónde está el trazo.
+2. Recortar caja mínima del número.
+3. Reescalar y pegar centrado en un lienzo nuevo.
+
+Ventaja:
+- Solución rápida sin reentrenar modelos.
+
+Uso típico:
+- Cuando quieres corregir desplazamiento inmediatamente desde `app.py`.
+
+### Opción 2: Entrenar con datos descentrados (aumento de datos)
+
+Idea:
+- Durante entrenamiento, desplazar/rotar/escalar números de forma aleatoria.
+- La red aprende que la posición no define la clase.
+
+Ventaja:
+- Mayor robustez estructural del modelo.
+
+Uso típico:
+- Cuando puedes permitirte reentrenar y buscas robustez real en producción.
+
+---
+
+## 8) Entrenamiento local
 
 ```powershell
 cd c:\Users\abel.perez\Desktop\ML\SignDetectorApp
@@ -143,7 +166,7 @@ pip install -r requirements.txt
 python train.py
 ```
 
-Opcional:
+Opciones:
 
 ```powershell
 python train.py --dataset-root "C:\ruta\dataset"
@@ -151,46 +174,33 @@ python train.py --max-images-per-class 500
 python train.py --image-size 28
 ```
 
-Esto genera/actualiza `modelo.joblib`.
-
 ---
 
-## 8) Ejecución local de la app
+## 9) Ejecución local (Streamlit)
 
 ```powershell
 .venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-Luego abre `http://localhost:8501`.
-
-Funcionalidades:
-- Subida de imagen.
-- Selección libre de modelos (1 a 4).
-- Comparativa de predicción y confianza.
-- Visualización de probabilidades por clase.
-- Visualización de voto mayoritario (Random Forest).
+La app:
+- recibe imagen subida;
+- permite seleccionar 1..5 modelos;
+- muestra predicción, confianza y probabilidades;
+- muestra además voto mayoritario para Random Forest.
 
 ---
 
-## 9) Deploy en Render
+## 10) Deploy en Render
 
-## Build Command
+### Build Command
 ```bash
 pip install -r requirements.txt
 ```
 
-## Start Command
+### Start Command
 ```bash
 streamlit run app.py --server.port $PORT --server.address 0.0.0.0
 ```
 
-Importante:
-- `modelo.joblib` debe estar en el repositorio (o debes entrenarlo en build si prefieres ese flujo).
-
----
-
-## 10) Notas de rendimiento
-
-- Reducir a 28x28 mantiene el proyecto ligero en RAM/CPU.
-- Este enfoque trata píxeles como features tabulares (no convolucional).
-- Para visión más compleja, una CNN suele rendir mejor, pero este diseño prioriza simplicidad pedagógica.
+Nota:
+- `modelo.joblib` debe estar en el repositorio para inferencia directa.
