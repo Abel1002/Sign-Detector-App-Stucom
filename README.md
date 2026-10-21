@@ -4,6 +4,8 @@ Aplicación educativa para reconocer **números escritos (0..9)** con:
 
 - **Árbol de Decisión**
 - **Random Forest**
+- **Red Neuronal MLP pequeña**
+- **Red Neuronal MLP profunda (regularizada)**
 - Interfaz Streamlit con **lienzo de dibujo** (`streamlit-drawable-canvas`)
 
 ---
@@ -113,8 +115,9 @@ Abrir `http://localhost:8501`.
 La app permite:
 - Dibujar un número en un lienzo
 - Subir una imagen
-- Elegir modelo: Árbol, Bosque o comparación
-- Ver voto mayoritario y probabilidades del Random Forest
+- Seleccionar qué modelos ejecutar (1/4, 2/4, 3/4 o 4/4)
+- Comparar predicción y confianza entre modelos
+- Ver voto mayoritario del Random Forest y probabilidades por clase en todos los modelos
 
 ---
 
@@ -155,3 +158,4 @@ streamlit run app.py --server.port $PORT --server.address 0.0.0.0
 - El pipeline redimensiona imágenes para mantener el modelo pequeño y estable.
 - Evita usar imágenes gigantes para entrenar; 28x28 o 32x32 suele ser suficiente en este enfoque clásico.
 - Random Forest no modela geometría espacial como una CNN; funciona mejor con preprocesado simple y consistente.
+- Las MLP también reciben imagen aplanada (no convolucional), por lo que se mantienen simples y rápidas para aprendizaje inicial.

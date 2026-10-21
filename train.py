@@ -1,16 +1,14 @@
 """
-Entrenamiento de clasificación de números escritos a mano (0..9) con:
+Entrenamiento educativo de 4 modelos para dígitos escritos (0..9):
 1) Árbol de Decisión
 2) Random Forest
+3) Red Neuronal MLP pequeña
+4) Red Neuronal MLP regularizada
 
-Dataset esperado:
-dataset/
-├── 0/
-├── 1/
-...
-└── 9/
-
-Cada carpeta contiene imágenes del dígito correspondiente sobre fondo blanco.
+Diseño intencional:
+- Mismo dataset y mismo preprocesado para los 4 modelos.
+- Comparación justa de rendimiento y comportamiento.
+- Implementación simple para entornos con recursos limitados.
 """
 
 from __future__ import annotations
@@ -18,6 +16,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import joblib
 import kagglehub
@@ -26,6 +25,7 @@ from PIL import Image, ImageOps
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
 
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -36,51 +36,53 @@ EXPECTED_CLASSES = list(range(10))
 
 
 def parse_args() -> argparse.Namespace:
-    """Configura argumentos para controlar dataset, tamaño de imagen y salida."""
+    """
+    Define argumentos CLI para:
+    - Descargar dataset automáticamente (Kaggle) o usar ruta local.
+    - Ajustar tamaño de imagen.
+    - Limitar imágenes por clase en pruebas rápidas.
+    """
     parser = argparse.ArgumentParser(
-        description="Entrena modelos de clasificación para dígitos escritos a mano (0..9)."
+        description="Entrena 4 modelos (DT, RF, MLP1, MLP2) para clasificación de dígitos escritos."
     )
     parser.add_argument(
         "--dataset-root",
         type=Path,
         default=None,
         help=(
-            "Ruta raíz local del dataset con carpetas 0..9. "
-            "Si se omite, se descargará automáticamente desde Kaggle."
+            "Ruta local del dataset con carpetas 0..9. "
+            "Si se omite, se descarga automáticamente desde Kaggle."
         ),
     )
     parser.add_argument(
         "--dataset-slug",
         type=str,
         default=DEFAULT_DATASET_SLUG,
-        help=f"Dataset de Kaggle a descargar si no se indica --dataset-root. Por defecto: {DEFAULT_DATASET_SLUG}",
+        help=f"Slug de Kaggle para descarga automática. Por defecto: {DEFAULT_DATASET_SLUG}",
     )
     parser.add_argument(
         "--model-path",
         type=Path,
         default=DEFAULT_MODEL_PATH,
-        help="Ruta de salida del modelo joblib. Por defecto: ./modelo.joblib",
+        help="Ruta de salida del artefacto joblib. Por defecto: ./modelo.joblib",
     )
     parser.add_argument(
         "--image-size",
         type=int,
         default=28,
-        help="Tamaño final cuadrado de entrada (ejemplo: 28 para 28x28).",
+        help="Tamaño final cuadrado de imagen (ejemplo: 28 para 28x28).",
     )
     parser.add_argument(
         "--max-images-per-class",
         type=int,
         default=0,
-        help=(
-            "Límite por clase para reducir peso/tiempo (0 = usar todas las imágenes). "
-            "Útil para pruebas rápidas."
-        ),
+        help="Límite por clase (0 = usar todas). Útil para validar rápido.",
     )
     return parser.parse_args()
 
 
 def infer_digit_label(image_path: Path) -> int | None:
-    """Devuelve la etiqueta del dígito según la carpeta ancestro '0'..'9'."""
+    """Obtiene la etiqueta numérica (0..9) leyendo carpetas ancestro."""
     for part in reversed(image_path.parts):
         if part.isdigit() and len(part) == 1:
             return int(part)
@@ -88,7 +90,7 @@ def infer_digit_label(image_path: Path) -> int | None:
 
 
 def collect_labeled_images(dataset_root: Path, max_images_per_class: int) -> list[tuple[Path, int]]:
-    """Encuentra imágenes válidas y aplica muestreo opcional por clase."""
+    """Busca imágenes válidas y opcionalmente limita la cantidad por clase."""
     images_by_label: dict[int, list[Path]] = defaultdict(list)
 
     for file_path in dataset_root.rglob("*"):
@@ -110,17 +112,16 @@ def collect_labeled_images(dataset_root: Path, max_images_per_class: int) -> lis
     labeled_images: list[tuple[Path, int]] = []
     for label in EXPECTED_CLASSES:
         labeled_images.extend((image_path, label) for image_path in images_by_label.get(label, []))
-
     return labeled_images
 
 
 def preprocess_image_to_vector(image_path: Path, image_size: int) -> np.ndarray:
     """
-    Convierte cada imagen a vector de entrada:
-    - Escala de grises
-    - Redimensión a image_size x image_size
-    - Normalización [0, 1]
-    - Aplanado 1D
+    Pipeline único de preprocesado (mismo para los 4 modelos):
+    1) Escala de grises.
+    2) Resize fijo.
+    3) Normalización [0, 1].
+    4) Flatten (vector 1D).
     """
     with Image.open(image_path) as img:
         grayscale = ImageOps.grayscale(img)
@@ -130,7 +131,7 @@ def preprocess_image_to_vector(image_path: Path, image_size: int) -> np.ndarray:
 
 
 def load_dataset(dataset_root: Path, image_size: int, max_images_per_class: int) -> tuple[np.ndarray, np.ndarray]:
-    """Carga y transforma el dataset a matrices X e y para scikit-learn."""
+    """Carga dataset y devuelve matrices X (features) e y (etiquetas)."""
     if not dataset_root.exists():
         raise FileNotFoundError(
             f"No existe la ruta del dataset: {dataset_root}\n"
@@ -141,7 +142,7 @@ def load_dataset(dataset_root: Path, image_size: int, max_images_per_class: int)
     if not labeled_images:
         raise FileNotFoundError(
             "No se encontraron imágenes etiquetadas. "
-            "Verifica que existan carpetas 0..9 con imágenes dentro."
+            "Verifica carpetas 0..9 y extensiones de imagen válidas."
         )
 
     labels_found = sorted({label for _, label in labeled_images})
@@ -149,7 +150,7 @@ def load_dataset(dataset_root: Path, image_size: int, max_images_per_class: int)
     if missing_labels:
         raise ValueError(
             "Faltan clases obligatorias en el dataset: "
-            f"{missing_labels}. Deben existir carpetas 0..9 con ejemplos."
+            f"{missing_labels}. Deben existir carpetas 0..9 con muestras."
         )
 
     feature_rows: list[np.ndarray] = []
@@ -164,52 +165,103 @@ def load_dataset(dataset_root: Path, image_size: int, max_images_per_class: int)
 
 
 def resolve_dataset_root(dataset_root: Path | None, dataset_slug: str) -> Path:
-    """Resuelve dataset local o descarga automática de Kaggle."""
+    """Usa ruta local o descarga automática con kagglehub."""
     if dataset_root is not None:
         if not dataset_root.exists():
             raise FileNotFoundError(f"No existe la ruta local indicada: {dataset_root}")
-        print(f"[2/6] Usando dataset local: {dataset_root.resolve()}")
+        print(f"[2/7] Usando dataset local: {dataset_root.resolve()}")
         return dataset_root
 
-    print(f"[2/6] Descargando dataset desde Kaggle Hub: {dataset_slug}")
+    print(f"[2/7] Descargando dataset desde Kaggle Hub: {dataset_slug}")
     downloaded_path = Path(kagglehub.dataset_download(dataset_slug))
     if not downloaded_path.exists():
-        raise FileNotFoundError(f"Se descargó el dataset pero la ruta no existe: {downloaded_path}")
+        raise FileNotFoundError(f"Se descargó el dataset, pero la ruta no existe: {downloaded_path}")
     print(f"Dataset descargado en: {downloaded_path}")
     return downloaded_path
 
 
-def train_models(X_train: np.ndarray, y_train: np.ndarray) -> tuple[DecisionTreeClassifier, RandomForestClassifier]:
-    """Entrena Árbol de Decisión y Random Forest con configuración educativa."""
-    print("[4/6] Entrenando Árbol de Decisión (Gini)...")
-    decision_tree = DecisionTreeClassifier(
-        criterion="gini",
-        max_depth=18,
-        min_samples_leaf=2,
-        random_state=RANDOM_STATE,
-    )
-    decision_tree.fit(X_train, y_train)
+def build_models() -> dict[str, Any]:
+    """
+    Construye los 4 modelos a comparar.
+    Los dos MLP son redes pequeñas para mantener simplicidad y despliegue ligero.
+    """
+    return {
+        "decision_tree": DecisionTreeClassifier(
+            criterion="gini",
+            max_depth=18,
+            min_samples_leaf=2,
+            random_state=RANDOM_STATE,
+        ),
+        "random_forest": RandomForestClassifier(
+            n_estimators=140,
+            criterion="gini",
+            max_depth=22,
+            max_features="sqrt",
+            min_samples_leaf=1,
+            bootstrap=True,
+            oob_score=True,
+            n_jobs=-1,
+            random_state=RANDOM_STATE,
+        ),
+        "mlp_small": MLPClassifier(
+            hidden_layer_sizes=(128,),
+            activation="relu",
+            solver="adam",
+            alpha=1e-4,
+            learning_rate_init=1e-3,
+            max_iter=60,
+            early_stopping=True,
+            n_iter_no_change=8,
+            random_state=RANDOM_STATE,
+        ),
+        "mlp_deep": MLPClassifier(
+            hidden_layer_sizes=(256, 128),
+            activation="relu",
+            solver="adam",
+            alpha=5e-4,
+            learning_rate_init=8e-4,
+            max_iter=80,
+            early_stopping=True,
+            n_iter_no_change=10,
+            random_state=RANDOM_STATE,
+        ),
+    }
 
-    print("[5/6] Entrenando Random Forest (Bagging + Voto Mayoritario)...")
-    random_forest = RandomForestClassifier(
-        n_estimators=140,
-        criterion="gini",
-        max_depth=22,
-        max_features="sqrt",
-        min_samples_leaf=1,
-        bootstrap=True,
-        oob_score=True,
-        n_jobs=-1,
-        random_state=RANDOM_STATE,
-    )
-    random_forest.fit(X_train, y_train)
-    return decision_tree, random_forest
+
+def train_and_evaluate_models(
+    X_train: np.ndarray,
+    X_test: np.ndarray,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
+    """Entrena y evalúa todos los modelos con el mismo split."""
+    models = build_models()
+    metrics: dict[str, dict[str, float]] = {}
+
+    for model_name, model in models.items():
+        print(f"\n[4/7] Entrenando modelo: {model_name}")
+        model.fit(X_train, y_train)
+        predictions = model.predict(X_test)
+        accuracy = accuracy_score(y_test, predictions)
+        metrics[model_name] = {"accuracy": float(accuracy)}
+        print(f"Accuracy {model_name}: {accuracy:.4f}")
+
+        # Reporte detallado solo para los dos modelos más potentes en producción.
+        if model_name in {"random_forest", "mlp_deep"}:
+            print(f"\nReporte de clasificación ({model_name}):")
+            print(classification_report(y_test, predictions, digits=4))
+
+    random_forest = models["random_forest"]
+    metrics["random_forest"]["oob_score"] = float(random_forest.oob_score_)
+    print(f"OOB Score random_forest: {random_forest.oob_score_:.4f}")
+
+    return models, metrics
 
 
 def main() -> None:
     args = parse_args()
 
-    print("[1/6] Validando parámetros...")
+    print("[1/7] Validando parámetros...")
     if args.image_size <= 0:
         raise ValueError("--image-size debe ser mayor que 0.")
     if args.max_images_per_class < 0:
@@ -217,7 +269,7 @@ def main() -> None:
 
     dataset_root = resolve_dataset_root(dataset_root=args.dataset_root, dataset_slug=args.dataset_slug)
 
-    print("[3/6] Cargando y preprocesando imágenes...")
+    print("[3/7] Cargando y preprocesando imágenes...")
     X, y = load_dataset(
         dataset_root=dataset_root,
         image_size=args.image_size,
@@ -230,6 +282,7 @@ def main() -> None:
     print(f"Distribución por clase: {class_distribution}")
     print(f"Features por imagen: {X.shape[1]}")
 
+    print("[4/7] Realizando split train/test estratificado...")
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
@@ -238,24 +291,14 @@ def main() -> None:
         stratify=y,
     )
 
-    decision_tree, random_forest = train_models(X_train, y_train)
+    models, metrics = train_and_evaluate_models(X_train=X_train, X_test=X_test, y_train=y_train, y_test=y_test)
 
-    dt_predictions = decision_tree.predict(X_test)
-    rf_predictions = random_forest.predict(X_test)
-
-    dt_accuracy = accuracy_score(y_test, dt_predictions)
-    rf_accuracy = accuracy_score(y_test, rf_predictions)
-
-    print("\n=== Métricas ===")
-    print(f"Accuracy Árbol de Decisión: {dt_accuracy:.4f}")
-    print(f"Accuracy Random Forest   : {rf_accuracy:.4f}")
-    print(f"OOB Score Random Forest  : {random_forest.oob_score_:.4f}")
-    print("\nReporte de clasificación (Random Forest):")
-    print(classification_report(y_test, rf_predictions, digits=4))
-
+    # Estructura final del artefacto para la app de inferencia.
     model_artifact = {
-        "decision_tree": decision_tree,
-        "random_forest": random_forest,
+        "decision_tree": models["decision_tree"],
+        "random_forest": models["random_forest"],
+        "mlp_small": models["mlp_small"],
+        "mlp_deep": models["mlp_deep"],
         "metadata": {
             "dataset_type": "handwritten-digits-folder",
             "dataset_source": args.dataset_slug if args.dataset_root is None else "local-path",
@@ -264,17 +307,13 @@ def main() -> None:
             "feature_count": int(X.shape[1]),
             "class_labels": [int(x) for x in classes.tolist()],
             "class_distribution": class_distribution,
-            "metrics": {
-                "decision_tree_accuracy": float(dt_accuracy),
-                "random_forest_accuracy": float(rf_accuracy),
-                "random_forest_oob_score": float(random_forest.oob_score_),
-            },
+            "metrics": metrics,
         },
     }
 
     args.model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model_artifact, args.model_path, compress=3)
-    print(f"\n[6/6] Modelo guardado en: {args.model_path.resolve()}")
+    print(f"\n[7/7] Modelo guardado en: {args.model_path.resolve()}")
 
 
 if __name__ == "__main__":
