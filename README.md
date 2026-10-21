@@ -99,26 +99,96 @@ Alternativas:
 
 ## 5) Si el problema fuera texto
 
-### En clásico:
-- TF-IDF + Logistic Regression
-- TF-IDF + Linear SVM
-- TF-IDF + Naive Bayes
+La idea es mantener la misma estructura didáctica que usamos en imágenes:
 
-### En deep learning:
-- LSTM/GRU
-- Transformers (BERT-like)
-- Optimizador frecuente: **AdamW**
+- **Red base**: funciona bien en casos típicos, pero falla en escenarios difíciles.
+- **Red adaptada**: aplica técnicas de la presentación para corregir ese fallo.
+
+En texto, un caso típico es clasificar género de películas usando:
+- sinopsis (texto libre),
+- y algunas variables numéricas (por ejemplo año o duración).
+
+### Casuística 1: clases desbalanceadas (Focal Loss vs Cross-Entropy)
+
+**Problema base:** si hay muchas muestras de géneros mayoritarios, la red se acostumbra a predecir siempre esas clases.
+
+- **Base recomendada:** MLP sobre features de texto con pérdida estándar.
+- **Adaptación recomendada:** mantener la arquitectura y cambiar entrenamiento a:
+  - `Focal Loss` (por ejemplo `gamma=2.0`),
+  - optimizador `AdamW`,
+  - `weight_decay` desacoplado (por ejemplo `1e-2`).
+
+**Qué se espera observar:** mejora del **Macro F1** en clases minoritarias.
+
+### Casuística 2: sinopsis muy cortas o con vocabulario distinto
+
+**Problema base:** con TF-IDF, si el texto es corto o usa palabras no vistas, gran parte del vector queda en ceros y el modelo pierde señal.
+
+- **Base recomendada:** MLP sobre TF-IDF (rápido y simple).
+- **Adaptación recomendada:** embeddings de lenguaje preentrenado + pooling global semántico.
+  - enfoque útil: probar `Global Max Pooling` para detectar si aparece una señal fuerte en cualquier parte del texto.
+
+**Qué se espera observar:** mayor robustez cuando cambian palabras o estilo de redacción.
+
+### Casuística 3: etiquetas ambiguas (películas híbridas)
+
+**Problema base:** etiquetas demasiado rígidas generan sobreconfianza y errores cuando la sinopsis mezcla varios géneros.
+
+- **Base recomendada:** clasificación con etiquetas duras.
+- **Adaptación recomendada:**
+  - `Dropout` (por ejemplo `p=0.3` a `0.4`),
+  - `Label Smoothing` (por ejemplo `0.1` a `0.15`).
+
+**Qué se espera observar:** predicciones menos extremas y mejor generalización en casos ambiguos.
+
+### Resumen práctico para clase
+
+Si quieres una ruta clara de experimentación:
+1. empezar por MLP + TF-IDF (baseline),
+2. medir `accuracy` y `macro_f1`,
+3. introducir una mejora cada vez (Focal Loss, AdamW, Dropout, Label Smoothing, embeddings),
+4. comparar contra baseline con la misma partición de datos.
 
 ---
 
 ## 6) Soluciones Alternativas a "DL"
 
-No aplicadas aquí para priorizar práctica del modelo, pero válidas:
+Estas soluciones no se centran en “hacer una red más compleja”, pero son totalmente válidas y muy útiles en proyectos reales.
+En este proyecto no fueron la vía principal porque queríamos practicar más entrenamiento de redes.
 
-1. **Centrado previo del trazo** (bounding box + recentrado en app).
-2. **Aumento de datos con desplazamiento** durante entrenamiento.
+### Opción 1: centrar el número antes de predecir (parche de entrada)
 
-Estas estrategias no son peores ni mejores por sí mismas; depende de objetivo, coste y datos.
+Lógica simple:
+1. detectar dónde está el trazo,
+2. recortar el área útil,
+3. reescalar y pegar en el centro del lienzo.
+
+Ventaja:
+- mejora inmediata sin reentrenar todo el modelo.
+
+Cuándo usarla:
+- cuando necesitas una mejora rápida en inferencia con bajo coste.
+
+### Opción 2: entrenar con datos descentrados (augmentation)
+
+Lógica simple:
+- durante entrenamiento, mover/rotar/escalar el número de forma aleatoria para que la red aprenda que la posición no define la clase.
+
+Parámetros orientativos:
+- `translate` en torno a `0.20`,
+- `degrees` moderado (por ejemplo `±10`),
+- `scale` controlado para no destruir el trazo.
+
+Ventaja:
+- el modelo se vuelve robusto por aprendizaje, no por “parche” en entrada.
+
+Cuándo usarla:
+- cuando quieres robustez más general para escenarios reales.
+
+### Criterio rápido de decisión
+
+- **Poco tiempo / pocos recursos:** centrar antes de predecir.
+- **Más tiempo de entrenamiento:** augmentation para que la red aprenda invariancia posicional.
 
 ---
 
@@ -259,7 +329,7 @@ A continuación tienes 3 casuísticas análogas para trabajar en clase mantenien
 
 ---
 
-### Ejemplo de código para alumnos (adaptando `alumnos.py`)
+### Ejemplo de código para alumnos, adaptado a ejemplo de codigo de alumnos.
 
 ```python
 """
