@@ -16,11 +16,11 @@ Clasificación de números escritos (0..9) con comparación entre:
 - [2) Arquitectura resumida](#2-arquitectura-resumida)
 - [3) Parámetros principales usados](#3-parámetros-principales-usados)
 - [4) ¿Por qué `solver=\"adam\"` en MLP?](#4-por-qué-solveradam-en-mlp)
-- [5) Si el problema fuera texto](#5-si-el-problema-fuera-texto)
 - [6) Entrenamiento](#6-entrenamiento)
 - [7) Ejecución de la app](#7-ejecución-de-la-app)
 - [8) Render](#8-render)
 - [9) Resultados finales en `Prueba Desplazados`](#9-resultados-finales-en-prueba-desplazados)
+- [5) Si el problema fuera texto](#5-si-el-problema-fuera-texto)
 - [10) Posibles mejoras de CNN (ejercicio para alumnos que no vinieron el último día).](#10-posibles-mejoras-de-cnn-ejercicio-para-alumnos-que-no-vinieron-el-último-día)
 - [11) Redes neuronales de Texto/Caracteristicas.](#11-redes-neuronales-de-textocaracteristicas)
 - [12) Soluciones Alternativas a "DL"](#12-soluciones-alternativas-a-dl)
@@ -114,60 +114,6 @@ Alternativas:
 
 ---
 
-## 5) Si el problema fuera texto
-
-La idea es mantener la misma estructura didáctica que usamos en imágenes:
-
-- **Red base**: funciona bien en casos típicos, pero falla en escenarios difíciles.
-- **Red adaptada**: aplica técnicas de la presentación para corregir ese fallo.
-
-En texto, un caso típico es clasificar género de películas usando:
-- sinopsis (texto libre),
-- y algunas variables numéricas (por ejemplo año o duración).
-
-### Casuística 1: clases desbalanceadas (Focal Loss vs Cross-Entropy)
-
-**Problema base:** si hay muchas muestras de géneros mayoritarios, la red se acostumbra a predecir siempre esas clases.
-
-- **Base recomendada:** MLP sobre features de texto con pérdida estándar.
-- **Adaptación recomendada:** mantener la arquitectura y cambiar entrenamiento a:
-  - `Focal Loss` (por ejemplo `gamma=2.0`),
-  - optimizador `AdamW`,
-  - `weight_decay` desacoplado (por ejemplo `1e-2`).
-
-**Qué se espera observar:** mejora del **Macro F1** en clases minoritarias.
-
-### Casuística 2: sinopsis muy cortas o con vocabulario distinto
-
-**Problema base:** con TF-IDF, si el texto es corto o usa palabras no vistas, gran parte del vector queda en ceros y el modelo pierde señal.
-
-- **Base recomendada:** MLP sobre TF-IDF (rápido y simple).
-- **Adaptación recomendada:** embeddings de lenguaje preentrenado + pooling global semántico.
-  - enfoque útil: probar `Global Max Pooling` para detectar si aparece una señal fuerte en cualquier parte del texto.
-
-**Qué se espera observar:** mayor robustez cuando cambian palabras o estilo de redacción.
-
-### Casuística 3: etiquetas ambiguas (películas híbridas)
-
-**Problema base:** etiquetas demasiado rígidas generan sobreconfianza y errores cuando la sinopsis mezcla varios géneros.
-
-- **Base recomendada:** clasificación con etiquetas duras.
-- **Adaptación recomendada:**
-  - `Dropout` (por ejemplo `p=0.3` a `0.4`),
-  - `Label Smoothing` (por ejemplo `0.1` a `0.15`).
-
-**Qué se espera observar:** predicciones menos extremas y mejor generalización en casos ambiguos.
-
-### Resumen práctico para clase
-
-Si quieres una ruta clara de experimentación:
-1. empezar por MLP + TF-IDF (baseline),
-2. medir `accuracy` y `macro_f1`,
-3. introducir una mejora cada vez (Focal Loss, AdamW, Dropout, Label Smoothing, embeddings),
-4. comparar contra baseline con la misma partición de datos.
-
----
-
 ## 6) Entrenamiento
 
 ```powershell
@@ -224,6 +170,60 @@ Con los modelos finales entrenados y validados sobre la carpeta [Prueba Desplaza
 Lectura rápida del resultado:
 - La MLP mejora mucho porque primero normaliza la posición del trazo (recentrado) y después clasifica.
 - La CNN depende más de cómo quedó adaptado el backbone preentrenado a este caso concreto (dígitos simples desplazados), y en esta configuración rápida de CPU todavía se queda corta.
+
+---
+
+## 5) Si el problema fuera texto
+
+La idea es mantener la misma estructura didáctica que usamos en imágenes:
+
+- **Red base**: funciona bien en casos típicos, pero falla en escenarios difíciles.
+- **Red adaptada**: aplica técnicas de la presentación para corregir ese fallo.
+
+En texto, un caso típico es clasificar género de películas usando:
+- sinopsis (texto libre),
+- y algunas variables numéricas (por ejemplo año o duración).
+
+### Casuística 1: clases desbalanceadas (Focal Loss vs Cross-Entropy)
+
+**Problema base:** si hay muchas muestras de géneros mayoritarios, la red se acostumbra a predecir siempre esas clases.
+
+- **Base recomendada:** MLP sobre features de texto con pérdida estándar.
+- **Adaptación recomendada:** mantener la arquitectura y cambiar entrenamiento a:
+  - `Focal Loss` (por ejemplo `gamma=2.0`),
+  - optimizador `AdamW`,
+  - `weight_decay` desacoplado (por ejemplo `1e-2`).
+
+**Qué se espera observar:** mejora del **Macro F1** en clases minoritarias.
+
+### Casuística 2: sinopsis muy cortas o con vocabulario distinto
+
+**Problema base:** con TF-IDF, si el texto es corto o usa palabras no vistas, gran parte del vector queda en ceros y el modelo pierde señal.
+
+- **Base recomendada:** MLP sobre TF-IDF (rápido y simple).
+- **Adaptación recomendada:** embeddings de lenguaje preentrenado + pooling global semántico.
+  - enfoque útil: probar `Global Max Pooling` para detectar si aparece una señal fuerte en cualquier parte del texto.
+
+**Qué se espera observar:** mayor robustez cuando cambian palabras o estilo de redacción.
+
+### Casuística 3: etiquetas ambiguas (películas híbridas)
+
+**Problema base:** etiquetas demasiado rígidas generan sobreconfianza y errores cuando la sinopsis mezcla varios géneros.
+
+- **Base recomendada:** clasificación con etiquetas duras.
+- **Adaptación recomendada:**
+  - `Dropout` (por ejemplo `p=0.3` a `0.4`),
+  - `Label Smoothing` (por ejemplo `0.1` a `0.15`).
+
+**Qué se espera observar:** predicciones menos extremas y mejor generalización en casos ambiguos.
+
+### Resumen práctico para clase
+
+Si quieres una ruta clara de experimentación:
+1. empezar por MLP + TF-IDF (baseline),
+2. medir `accuracy` y `macro_f1`,
+3. introducir una mejora cada vez (Focal Loss, AdamW, Dropout, Label Smoothing, embeddings),
+4. comparar contra baseline con la misma partición de datos.
 
 ---
 
