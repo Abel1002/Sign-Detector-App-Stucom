@@ -67,6 +67,20 @@ Se entrena una red PyTorch:
 
 Esto implementa la teoría correcta: el pooling global actúa sobre **canales convolucionales**, no sobre píxeles crudos.
 
+### Transfer learning en este proyecto
+
+En el entrenamiento profundo de [train.py](C:/Users/abel.perez/Desktop/ML/SignDetectorApp/train.py) sí usamos transfer learning, y lo hacemos de forma controlada para CPU:
+
+- **Modelo preentrenado usado:** `MobileNetV2` de `torchvision` con `weights=MobileNet_V2_Weights.DEFAULT` (preentrenada en ImageNet).
+- **Qué parte reutilizamos:** el extractor convolucional (`features`) como base visual ya entrenada.
+- **Cómo lo adaptamos:**
+  1. congelamos casi todo el backbone (para no recalcular gradientes de todas las capas),
+  2. descongelamos solo el último bloque (`features[18]`) para ajustar detalles a dígitos,
+  3. entrenamos una cabeza nueva (`Dropout + Linear`) específica para clases `0..9`.
+- **Para qué lo hacemos:** ganar velocidad y estabilidad en entrenamiento con pocos recursos, aprovechando patrones visuales generales ya aprendidos.
+
+Resumen: no entrenamos la CNN “desde cero”; reutilizamos conocimiento visual previo (ImageNet) y lo especializamos en nuestro problema.
+
 ---
 
 ## 3) Parámetros principales usados

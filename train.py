@@ -301,12 +301,14 @@ class MobileNetV2GlobalMaxPool(nn.Module):
         - Reducción espacial global para tolerar desplazamiento.
         """
         super().__init__()
+        # Reutilizamos pesos preentrenados en ImageNet para transfer learning visual.
         base = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
         self.features = base.features
+        # Global Max Pooling: toma la activación más fuerte por canal para reducir sensibilidad posicional.
         self.global_max_pool = nn.AdaptiveMaxPool2d((1, 1))
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.2),
-            nn.Linear(1280, num_classes),
+            nn.Dropout(p=0.2),  # Regulariza la cabeza final y reduce sobreajuste.
+            nn.Linear(1280, num_classes),  # Mapea 1280 canales de MobileNet a 10 dígitos.
         )
 
     def forward(self, x):
@@ -336,8 +338,11 @@ class FocalLoss(nn.Module):
         - Prioriza ejemplos difíciles y evita sobreconfianza extrema.
         """
         super().__init__()
-        self.gamma = gamma
-        self.ce = nn.CrossEntropyLoss(reduction="none", label_smoothing=label_smoothing)
+        self.gamma = gamma  # Intensidad del enfoque en casos difíciles (hard examples).
+        self.ce = nn.CrossEntropyLoss(
+            reduction="none",  # Necesario para aplicar ponderación focal por muestra.
+            label_smoothing=label_smoothing,  # Suaviza etiquetas para calibrar mejor probabilidades.
+        )
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """Calcula la pérdida focal media del batch."""
@@ -358,43 +363,43 @@ def build_models() -> dict[str, Any]:
     """
     return {
         "decision_tree": DecisionTreeClassifier(
-            criterion="gini",
-            max_depth=18,
-            min_samples_leaf=2,
-            random_state=RANDOM_STATE,
+            criterion="gini",  # Impureza de Gini para dividir nodos en clasificación multiclase.
+            max_depth=18,  # Limita complejidad para evitar memorizar ruido de píxeles.
+            min_samples_leaf=2,  # Evita hojas demasiado pequeñas e inestables.
+            random_state=RANDOM_STATE,  # Reproducibilidad en la estructura del árbol.
         ),
         "random_forest": RandomForestClassifier(
-            n_estimators=140,
-            criterion="gini",
-            max_depth=22,
-            max_features="sqrt",
-            min_samples_leaf=1,
-            bootstrap=True,
-            oob_score=True,
-            n_jobs=-1,
-            random_state=RANDOM_STATE,
+            n_estimators=140,  # Número de árboles: reduce varianza por voto mayoritario.
+            criterion="gini",  # Misma métrica de división que árbol base para consistencia.
+            max_depth=22,  # Permite capturar fronteras más complejas sin crecer infinito.
+            max_features="sqrt",  # Feature bagging clásico: submuestreo de columnas por split.
+            min_samples_leaf=1,  # Mantiene flexibilidad máxima en cada árbol individual.
+            bootstrap=True,  # Bootstrapping para crear diversidad entre árboles.
+            oob_score=True,  # Estimación OOB sin usar test externo.
+            n_jobs=-1,  # Usa todos los núcleos de CPU para acelerar entrenamiento.
+            random_state=RANDOM_STATE,  # Reproducibilidad del bosque.
         ),
         "mlp_basic": MLPClassifier(
-            hidden_layer_sizes=(128,),
-            activation="relu",
-            solver="adam",
-            alpha=1e-4,
-            learning_rate_init=1e-3,
-            max_iter=60,
-            early_stopping=True,
-            n_iter_no_change=8,
-            random_state=RANDOM_STATE,
+            hidden_layer_sizes=(128,),  # Una capa oculta compacta para baseline rápido.
+            activation="relu",  # No linealidad robusta para datos de imagen tabular.
+            solver="adam",  # Optimizador adaptativo estable en este tipo de problema.
+            alpha=1e-4,  # Regularización L2 suave para controlar sobreajuste.
+            learning_rate_init=1e-3,  # LR inicial estándar para convergencia estable.
+            max_iter=60,  # Límite de iteraciones de entrenamiento.
+            early_stopping=True,  # Corta entrenamiento cuando no mejora validación interna.
+            n_iter_no_change=8,  # Paciencia de early stopping.
+            random_state=RANDOM_STATE,  # Reproducibilidad.
         ),
         MLP_ATTENTION_KEY: MLPClassifier(
-            hidden_layer_sizes=(256, 128),
-            activation="relu",
-            solver="adam",
-            alpha=5e-4,
-            learning_rate_init=8e-4,
-            max_iter=90,
-            early_stopping=True,
-            n_iter_no_change=10,
-            random_state=RANDOM_STATE,
+            hidden_layer_sizes=(256, 128),  # Mayor capacidad para features enriquecidas por atención.
+            activation="relu",  # Mantiene comportamiento no lineal estable.
+            solver="adam",  # Optimización adaptativa para acelerar convergencia.
+            alpha=5e-4,  # L2 más fuerte para compensar mayor capacidad del modelo.
+            learning_rate_init=8e-4,  # LR algo menor para entrenar de forma más fina.
+            max_iter=90,  # Más iteraciones para ajustar mejor la variante tratada.
+            early_stopping=True,  # Evita sobreentrenar cuando se estanca.
+            n_iter_no_change=10,  # Paciencia ligeramente mayor para no cortar demasiado pronto.
+            random_state=RANDOM_STATE,  # Reproducibilidad.
         ),
     }
 
@@ -485,13 +490,14 @@ def train_cnn_global_max_pooling(
     transform_train = transforms.Compose(
         [
             transforms.RandomAffine(
-                degrees=12,
-                translate=(0.30, 0.30),
-                scale=(0.50, 0.95),
-                fill=255,
+                degrees=12,  # Rotación leve para tolerancia angular.
+                translate=(0.30, 0.30),  # Desplazamiento fuerte para robustez posicional.
+                scale=(0.50, 0.95),  # Simula variación de tamaño en el trazo.
+                fill=255,  # Rellena huecos con fondo blanco, coherente con el dataset base.
             ),
-            transforms.ToTensor(),
+            transforms.ToTensor(),  # Convierte PIL a tensor [C,H,W] en rango [0,1].
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            # Normalización ImageNet para alinear la entrada con el backbone preentrenado.
         ]
     )
     transform_eval = transforms.Compose(
@@ -517,13 +523,16 @@ def train_cnn_global_max_pooling(
     for parameter in model.features[18].parameters():
         parameter.requires_grad = True
 
+    # Loss enfocada en casos difíciles + ligera calibración para evitar sobreconfianza.
     criterion = FocalLoss(gamma=2.0, label_smoothing=0.05)
     optimizer = torch.optim.AdamW(
         [
+            # LR más bajo en bloque preentrenado para no destruir conocimiento transferido.
             {"params": model.features[18].parameters(), "lr": cnn_lr * 0.2},
+            # LR base en la cabeza nueva para adaptarla más rápido al dataset de dígitos.
             {"params": model.classifier.parameters(), "lr": cnn_lr},
         ],
-        weight_decay=1e-2,
+        weight_decay=1e-2,  # Regularización desacoplada (AdamW) para mejorar generalización.
     )
 
     best_state = copy.deepcopy(model.state_dict())
