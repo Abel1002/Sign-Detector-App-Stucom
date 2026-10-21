@@ -74,13 +74,14 @@ Esto implementa la teoría correcta: el pooling global actúa sobre **canales co
 - Preprocesado de entrada: **recentrado por bounding-box** + máscara de atención espacial sobre tinta
 
 ## CNN Solución 1
-- `cnn_image_size=128`
-- `cnn_epochs>=8` efectivos (si pasas menos, se eleva a 8 internamente)
-- `cnn_batch_size=32`
-- Fine-tuning progresivo: se descongelan bloques `features[14:]` de MobileNetV2
+- `cnn_image_size=64` (default optimizado CPU)
+- `cnn_epochs=4` (default)
+- `cnn_batch_size=64`
+- Fine-tuning quirúrgico: se descongela solo `features[18]` de MobileNetV2
 - Optimizador: `AdamW` con LR diferencial (backbone bajo, cabeza alta)
 - Loss: `FocalLoss(gamma=2.0, label_smoothing=0.05)`
-- `RandomAffine` en train: `degrees=12`, `translate=(0.35, 0.35)`, `scale=(0.45, 0.95)`, `fill=255`
+- `RandomAffine` en train: `degrees=12`, `translate=(0.30, 0.30)`, `scale=(0.50, 0.95)`, `fill=255`
+- Carga CNN en memoria: precarga en RAM para evitar I/O de disco en cada época
 
 ---
 
@@ -164,6 +165,45 @@ streamlit run app.py --server.port $PORT --server.address 0.0.0.0
 ```
 
 Necesitas subir `modelo.joblib` para inferencia directa en deploy.
+
+---
+
+## Resultados finales en `Prueba Desplazados`
+
+Con los modelos finales entrenados y validados sobre la carpeta [Prueba Desplazados](C:/Users/abel.perez/Desktop/ML/SignDetectorApp/Prueba%20Desplazados):
+
+- **MLP tratada (Solución 3: atención + recentrado): `9/10`**
+- **CNN tratada (Solución 1 real: Global Max Pooling): `4/10`**
+
+Lectura rápida del resultado:
+- La MLP mejora mucho porque primero normaliza la posición del trazo (recentrado) y después clasifica.
+- La CNN depende más de cómo quedó adaptado el backbone preentrenado a este caso concreto (dígitos simples desplazados), y en esta configuración rápida de CPU todavía se queda corta.
+
+---
+
+## Posibles mejoras de CNN (ejercicio para alumnos que no vinieron el último día)
+
+Esta parte se deja como **ejercicio guiado** (sin código en el README) para practicar los conceptos de clase:
+
+1. **Combinar dos tipos de pooling (Avg + Max)**
+   - En vez de usar solo Max Pooling, combinar Average Pooling y Max Pooling para conservar más información del trazo.
+
+2. **Entrenamiento en dos fases (fine-tuning progresivo)**
+   - Fase 1: entrenar solo la cabeza final.
+   - Fase 2: descongelar los últimos bloques convolucionales y ajustar con una tasa de aprendizaje más baja.
+
+3. **Revisar fondo y normalización de entrada**
+   - Verificar que el fondo “vacío” del lienzo no esté generando activaciones artificiales.
+   - Probar inversión de fondo/trazo cuando tenga sentido para estabilizar la entrada.
+
+4. **Ajustar augmentation para no deformar demasiado**
+   - Reducir transformaciones extremas para no destruir trazos pequeños.
+   - Mantener desplazamientos realistas, pero con escalas que conserven forma del número.
+
+5. **Equilibrar velocidad vs robustez**
+   - Subir ligeramente épocas o muestras por clase cuando el tiempo de clase lo permita para ganar robustez en desplazados.
+
+Objetivo didáctico: que el alumno compare qué cambios mejoran la robustez sin perder el enfoque de optimización en CPU.
 
 ---
 

@@ -41,7 +41,7 @@ EXPECTED_CLASSES = list(range(10))
 
 
 def parse_args() -> argparse.Namespace:
-    """Lee argumentos de ejecución para datos, entrenamiento y salida."""
+    """Lee argumentos optimizados por defecto para ejecución rápida en CPU."""
     parser = argparse.ArgumentParser(
         description="Entrena clásicos + 3 redes (MLP básica, CNN+GMP, MLP con atención)."
     )
@@ -54,11 +54,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH, help="Ruta de modelo.joblib.")
     parser.add_argument("--image-size", type=int, default=28, help="Resolución base para modelos tabulares.")
-    parser.add_argument("--max-images-per-class", type=int, default=0, help="Límite por clase (0=todas).")
-    parser.add_argument("--cnn-image-size", type=int, default=128, help="Resolución para CNN Solución 1.")
+    parser.add_argument("--max-images-per-class", type=int, default=250, help="Límite por clase (0=todas).")
+    parser.add_argument("--cnn-image-size", type=int, default=64, help="Resolución para CNN Solución 1.")
     parser.add_argument("--cnn-epochs", type=int, default=4, help="Épocas de entrenamiento de la CNN.")
-    parser.add_argument("--cnn-batch-size", type=int, default=32, help="Batch size para la CNN.")
-    parser.add_argument("--cnn-lr", type=float, default=1e-3, help="Learning rate de la cabeza CNN.")
+    parser.add_argument("--cnn-batch-size", type=int, default=64, help="Batch size para la CNN.")
+    parser.add_argument("--cnn-lr", type=float, default=2e-3, help="Learning rate de la cabeza CNN.")
     return parser.parse_args()
 
 
@@ -181,23 +181,26 @@ def build_attention_features(X: np.ndarray, image_size: int) -> np.ndarray:
     return X_weighted.reshape(X.shape[0], -1)
 
 
-class DigitPathDataset(Dataset):
-    """Dataset PyTorch a partir de rutas/etiquetas para entrenamiento CNN."""
+class InMemoryDigitDataset(Dataset):
+    """Precarga imágenes redimensionadas en RAM para reducir I/O en cada época."""
 
-    def __init__(self, samples: list[tuple[Path, int]], transform) -> None:
-        self.samples = samples
+    def __init__(self, samples: list[tuple[Path, int]], cnn_image_size: int, transform) -> None:
         self.transform = transform
+        self.data: list[tuple[Image.Image, int]] = []
+
+        for image_path, label in samples:
+            with Image.open(image_path) as img:
+                rgb_small = img.convert("RGB").resize((cnn_image_size, cnn_image_size), Image.Resampling.BILINEAR)
+            self.data.append((rgb_small, label))
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.data)
 
     def __getitem__(self, index: int):
-        image_path, label = self.samples[index]
-        with Image.open(image_path) as img:
-            rgb = img.convert("RGB")
+        image, label = self.data[index]
         if self.transform is not None:
-            rgb = self.transform(rgb)
-        return rgb, label
+            image = self.transform(image)
+        return image, label
 
 
 class MobileNetV2GlobalMaxPool(nn.Module):
@@ -335,12 +338,13 @@ def train_cnn_solution1(
     cnn_lr: float,
 ) -> tuple[dict[str, Any], dict[str, float]]:
     """Entrena CNN Solución 1 con fine-tuning progresivo + AdamW + Focal Loss."""
+    torch.set_num_threads(max(1, torch.get_num_threads()))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[7/9] Entrenando CNN Solución 1 (Fine-Tuning + AdamW + FocalLoss) en: {device}")
+    print(f"[7/9] Entrenando CNN Solución 1 (Modo rápido CPU + Fine-Tuning) en: {device}")
 
     labels = np.array([label for _, label in labeled_images], dtype=np.int32)
     indices = np.arange(len(labeled_images))
-    train_idx, test_idx, y_train, y_test = train_test_split(
+    train_idx, test_idx, _, _ = train_test_split(
         indices,
         labels,
         test_size=0.2,
@@ -353,12 +357,10 @@ def train_cnn_solution1(
 
     transform_train = transforms.Compose(
         [
-            transforms.Resize((cnn_image_size, cnn_image_size)),
-            transforms.Grayscale(num_output_channels=3),
             transforms.RandomAffine(
                 degrees=12,
-                translate=(0.35, 0.35),
-                scale=(0.45, 0.95),
+                translate=(0.30, 0.30),
+                scale=(0.50, 0.95),
                 fill=255,
             ),
             transforms.ToTensor(),
@@ -367,15 +369,14 @@ def train_cnn_solution1(
     )
     transform_eval = transforms.Compose(
         [
-            transforms.Resize((cnn_image_size, cnn_image_size)),
-            transforms.Grayscale(num_output_channels=3),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
-    train_dataset = DigitPathDataset(train_samples, transform=transform_train)
-    test_dataset = DigitPathDataset(test_samples, transform=transform_eval)
+    print("Precargando muestras CNN en RAM...")
+    train_dataset = InMemoryDigitDataset(train_samples, cnn_image_size=cnn_image_size, transform=transform_train)
+    test_dataset = InMemoryDigitDataset(test_samples, cnn_image_size=cnn_image_size, transform=transform_eval)
     train_loader = DataLoader(train_dataset, batch_size=cnn_batch_size, shuffle=True, num_workers=0)
     test_loader = DataLoader(test_dataset, batch_size=cnn_batch_size, shuffle=False, num_workers=0)
 
@@ -385,15 +386,14 @@ def train_cnn_solution1(
     for parameter in model.features.parameters():
         parameter.requires_grad = False
 
-    # Fine-tuning de bloques finales para adaptar representación espacial al nuevo dominio.
-    for block in model.features[14:]:
-        for parameter in block.parameters():
-            parameter.requires_grad = True
+    # Fine-tuning quirúrgico: solo último bloque para reducir coste de backward en CPU.
+    for parameter in model.features[18].parameters():
+        parameter.requires_grad = True
 
     criterion = FocalLoss(gamma=2.0, label_smoothing=0.05)
     optimizer = torch.optim.AdamW(
         [
-            {"params": model.features[14:].parameters(), "lr": cnn_lr * 0.1},
+            {"params": model.features[18].parameters(), "lr": cnn_lr * 0.2},
             {"params": model.classifier.parameters(), "lr": cnn_lr},
         ],
         weight_decay=1e-2,
@@ -401,9 +401,8 @@ def train_cnn_solution1(
 
     best_state = copy.deepcopy(model.state_dict())
     best_test_acc = 0.0
-    effective_epochs = max(cnn_epochs, 8)
 
-    for epoch in range(effective_epochs):
+    for epoch in range(cnn_epochs):
         model.train()
         running_loss = 0.0
         running_correct = 0
@@ -441,7 +440,7 @@ def train_cnn_solution1(
         eval_acc = eval_correct / max(eval_total, 1)
 
         print(
-            f"[CNN][Epoch {epoch + 1}/{effective_epochs}] "
+            f"[CNN][Epoch {epoch + 1}/{cnn_epochs}] "
             f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} test_acc={eval_acc:.4f}"
         )
 

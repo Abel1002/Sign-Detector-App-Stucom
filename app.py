@@ -276,7 +276,8 @@ cnn_model = load_cnn_model_from_artifact(artifact)
 
 metadata = artifact["metadata"]
 image_size = int(metadata["image_size"])
-cnn_image_size = int(metadata.get("cnn_image_size", 128))
+cnn_config = artifact.get("cnn_sol1_global_maxpool_config", {})
+cnn_image_size = int(cnn_config.get("cnn_image_size", metadata.get("cnn_image_size", 128)))
 class_labels = [int(label) for label in metadata["class_labels"]]
 metrics = metadata.get("metrics", {})
 
