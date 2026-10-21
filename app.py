@@ -64,13 +64,13 @@ def load_artifact(model_path: Path) -> dict:
 
 
 @st.cache_resource
-def load_cnn_model_from_artifact(artifact: dict):
+def load_cnn_model_from_artifact(_artifact: dict):
     """Reconstruye CNN Solución 1 desde state_dict guardado."""
-    if "cnn_sol1_global_maxpool_state_dict" not in artifact:
+    if "cnn_sol1_global_maxpool_state_dict" not in _artifact:
         return None
-    config = artifact.get("cnn_sol1_global_maxpool_config", {})
+    config = _artifact.get("cnn_sol1_global_maxpool_config", {})
     model = MobileNetV2GlobalMaxPool(num_classes=int(config.get("num_classes", 10)))
-    model.load_state_dict(artifact["cnn_sol1_global_maxpool_state_dict"], strict=True)
+    model.load_state_dict(_artifact["cnn_sol1_global_maxpool_state_dict"], strict=True)
     model.eval()
     return model
 
