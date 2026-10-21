@@ -71,13 +71,16 @@ Esto implementa la teoría correcta: el pooling global actúa sobre **canales co
 - `solver="adam"`
 - `alpha=5e-4`
 - `learning_rate_init=8e-4`
+- Preprocesado de entrada: **recentrado por bounding-box** + máscara de atención espacial sobre tinta
 
 ## CNN Solución 1
 - `cnn_image_size=128`
-- `cnn_epochs=4` (por defecto)
+- `cnn_epochs>=8` efectivos (si pasas menos, se eleva a 8 internamente)
 - `cnn_batch_size=32`
-- Optimizador: `Adam` sobre la cabeza clasificadora
-- `RandomAffine` en train (rotación/desplazamiento/escala) para robustez
+- Fine-tuning progresivo: se descongelan bloques `features[14:]` de MobileNetV2
+- Optimizador: `AdamW` con LR diferencial (backbone bajo, cabeza alta)
+- Loss: `FocalLoss(gamma=2.0, label_smoothing=0.05)`
+- `RandomAffine` en train: `degrees=12`, `translate=(0.35, 0.35)`, `scale=(0.45, 0.95)`, `fill=255`
 
 ---
 

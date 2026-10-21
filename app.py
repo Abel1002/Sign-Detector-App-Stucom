@@ -84,14 +84,30 @@ def preprocess_pil_image(input_image: Image.Image, image_size: int) -> tuple[Ima
 
 
 def build_attention_features(vector: np.ndarray, image_size: int) -> np.ndarray:
-    """Transformación de Solución 3 para MLP de atención espacial."""
+    """Transformación Solución 3: recentrado + atención espacial sobre tinta."""
     image = vector.reshape(image_size, image_size)
-    min_value = float(image.min())
-    max_value = float(image.max())
-    dynamic_range = max(max_value - min_value, 1e-6)
-    normalized = (image - min_value) / dynamic_range
-    attention_mask = 0.25 + 0.75 * normalized
-    weighted = image * attention_mask
+    ink = 1.0 - image
+    rows, cols = np.where(ink > 0.1)
+
+    if len(rows) > 0:
+        y_min, y_max = int(np.min(rows)), int(np.max(rows))
+        x_min, x_max = int(np.min(cols)), int(np.max(cols))
+        cropped = Image.fromarray((image * 255.0).astype(np.uint8)).crop((x_min, y_min, x_max + 1, y_max + 1))
+        width, height = cropped.size
+        scale = (image_size * 0.7) / max(width, height, 1)
+        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        resized = cropped.resize(new_size, Image.Resampling.BILINEAR)
+
+        centered = Image.new("L", (image_size, image_size), color=255)
+        offset_x = (image_size - new_size[0]) // 2
+        offset_y = (image_size - new_size[1]) // 2
+        centered.paste(resized, (offset_x, offset_y))
+        image = np.asarray(centered, dtype=np.float32) / 255.0
+        ink = 1.0 - image
+
+    attention_mask = 0.25 + 0.75 * ink
+    weighted_ink = np.clip(ink * attention_mask, 0.0, 1.0)
+    weighted = 1.0 - weighted_ink
     return weighted.reshape(1, -1)
 
 

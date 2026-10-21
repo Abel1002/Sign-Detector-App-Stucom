@@ -147,17 +147,36 @@ def resolve_dataset_root(dataset_root: Path | None, dataset_slug: str) -> Path:
 
 
 def build_attention_features(X: np.ndarray, image_size: int) -> np.ndarray:
-    """Solución 3: ponderación espacial dinámica sobre imagen base."""
+    """Solución 3: recentrado + ponderación espacial dinámica sobre tinta."""
     X_images = X.reshape(-1, image_size, image_size)
     X_weighted = np.empty_like(X_images, dtype=np.float32)
 
     for index, image in enumerate(X_images):
-        min_value = float(image.min())
-        max_value = float(image.max())
-        dynamic_range = max(max_value - min_value, 1e-6)
-        normalized = (image - min_value) / dynamic_range
-        attention_mask = 0.25 + 0.75 * normalized
-        X_weighted[index] = image * attention_mask
+        ink = 1.0 - image
+        rows, cols = np.where(ink > 0.1)
+
+        if len(rows) > 0:
+            y_min, y_max = int(np.min(rows)), int(np.max(rows))
+            x_min, x_max = int(np.min(cols)), int(np.max(cols))
+            cropped = Image.fromarray((image * 255.0).astype(np.uint8)).crop((x_min, y_min, x_max + 1, y_max + 1))
+            width, height = cropped.size
+            scale = (image_size * 0.7) / max(width, height, 1)
+            new_size = (
+                max(1, int(width * scale)),
+                max(1, int(height * scale)),
+            )
+            resized = cropped.resize(new_size, Image.Resampling.BILINEAR)
+
+            centered = Image.new("L", (image_size, image_size), color=255)
+            offset_x = (image_size - new_size[0]) // 2
+            offset_y = (image_size - new_size[1]) // 2
+            centered.paste(resized, (offset_x, offset_y))
+            image = np.asarray(centered, dtype=np.float32) / 255.0
+            ink = 1.0 - image
+
+        attention_mask = 0.25 + 0.75 * ink
+        weighted_ink = np.clip(ink * attention_mask, 0.0, 1.0)
+        X_weighted[index] = 1.0 - weighted_ink
 
     return X_weighted.reshape(X.shape[0], -1)
 
@@ -204,6 +223,23 @@ class MobileNetV2GlobalMaxPool(nn.Module):
         x = self.global_max_pool(x)
         x = torch.flatten(x, 1)
         return self.classifier(x)
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss con label smoothing:
+    reduce el peso de ejemplos fáciles y concentra gradiente en casos difíciles.
+    """
+
+    def __init__(self, gamma: float = 2.0, label_smoothing: float = 0.05) -> None:
+        super().__init__()
+        self.gamma = gamma
+        self.ce = nn.CrossEntropyLoss(reduction="none", label_smoothing=label_smoothing)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce_loss = self.ce(logits, targets)
+        pt = torch.exp(-ce_loss)
+        return (((1.0 - pt) ** self.gamma) * ce_loss).mean()
 
 
 def build_models() -> dict[str, Any]:
@@ -298,9 +334,9 @@ def train_cnn_solution1(
     cnn_batch_size: int,
     cnn_lr: float,
 ) -> tuple[dict[str, Any], dict[str, float]]:
-    """Entrena la CNN con Global Max Pooling y devuelve estado + métricas."""
+    """Entrena CNN Solución 1 con fine-tuning progresivo + AdamW + Focal Loss."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[7/9] Entrenando CNN Solución 1 en dispositivo: {device}")
+    print(f"[7/9] Entrenando CNN Solución 1 (Fine-Tuning + AdamW + FocalLoss) en: {device}")
 
     labels = np.array([label for _, label in labeled_images], dtype=np.int32)
     indices = np.arange(len(labeled_images))
@@ -320,10 +356,10 @@ def train_cnn_solution1(
             transforms.Resize((cnn_image_size, cnn_image_size)),
             transforms.Grayscale(num_output_channels=3),
             transforms.RandomAffine(
-                degrees=10,
-                translate=(0.15, 0.15),
-                scale=(0.9, 1.1),
-                fill=0,
+                degrees=12,
+                translate=(0.35, 0.35),
+                scale=(0.45, 0.95),
+                fill=255,
             ),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -345,17 +381,29 @@ def train_cnn_solution1(
 
     model = MobileNetV2GlobalMaxPool(num_classes=10).to(device)
 
-    # Congelamos backbone convolucional para mantener entrenamiento ligero y estable.
+    # Bloques iniciales congelados (features universales).
     for parameter in model.features.parameters():
         parameter.requires_grad = False
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.classifier.parameters(), lr=cnn_lr)
+    # Fine-tuning de bloques finales para adaptar representación espacial al nuevo dominio.
+    for block in model.features[14:]:
+        for parameter in block.parameters():
+            parameter.requires_grad = True
+
+    criterion = FocalLoss(gamma=2.0, label_smoothing=0.05)
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": model.features[14:].parameters(), "lr": cnn_lr * 0.1},
+            {"params": model.classifier.parameters(), "lr": cnn_lr},
+        ],
+        weight_decay=1e-2,
+    )
 
     best_state = copy.deepcopy(model.state_dict())
     best_test_acc = 0.0
+    effective_epochs = max(cnn_epochs, 8)
 
-    for epoch in range(cnn_epochs):
+    for epoch in range(effective_epochs):
         model.train()
         running_loss = 0.0
         running_correct = 0
@@ -393,7 +441,7 @@ def train_cnn_solution1(
         eval_acc = eval_correct / max(eval_total, 1)
 
         print(
-            f"[CNN][Epoch {epoch + 1}/{cnn_epochs}] "
+            f"[CNN][Epoch {epoch + 1}/{effective_epochs}] "
             f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} test_acc={eval_acc:.4f}"
         )
 
@@ -419,7 +467,7 @@ def train_cnn_solution1(
 
     metrics = {
         "accuracy": float(accuracy_score(all_targets, all_predictions)),
-        "feature_variant": "cnn_global_max_pool",
+        "feature_variant": "cnn_global_max_pool_finetuned",
     }
 
     state_dict_cpu = {key: value.detach().cpu() for key, value in model.state_dict().items()}
