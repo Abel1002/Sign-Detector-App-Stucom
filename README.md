@@ -5,8 +5,8 @@ Clasificación de números escritos (0..9) con comparación entre:
 - **Modelos clásicos**: Árbol de Decisión y Random Forest
 - **Redes neuronales (3)**:
   1. MLP básica
-  2. CNN tratada (**Solución 1 real**: Global Max Pooling sobre mapas convolucionales)
-  3. MLP tratada (**Solución 3**: atención espacial dinámica)
+  2. CNN tratada (**Global Max Pooling sobre mapas convolucionales**)
+  3. MLP tratada (**atención espacial dinámica + recentrado**)
 
 ---
 
@@ -38,9 +38,9 @@ Se usa para:
 - `decision_tree`
 - `random_forest`
 - `mlp_basic`
-- `mlp_sol3_attention` (después de aplicar máscara espacial)
+- `mlp_attention_recentered` (después de aplicar recentrado + máscara espacial)
 
-### Solución 1 real (CNN)
+### CNN con Global Max Pooling
 
 Se entrena una red PyTorch:
 
@@ -66,14 +66,14 @@ Esto implementa la teoría correcta: el pooling global actúa sobre **canales co
 - `alpha=1e-4`
 - `learning_rate_init=1e-3`
 
-## MLP Solución 3
+## MLP de Atención Espacial + Recentrado
 - `hidden_layer_sizes=(256, 128)`
 - `solver="adam"`
 - `alpha=5e-4`
 - `learning_rate_init=8e-4`
 - Preprocesado de entrada: **recentrado por bounding-box** + máscara de atención espacial sobre tinta
 
-## CNN Solución 1
+## CNN con Global Max Pooling
 - `cnn_image_size=64` (default optimizado CPU)
 - `cnn_epochs=4` (default)
 - `cnn_batch_size=64`
@@ -242,8 +242,8 @@ Necesitas subir `modelo.joblib` para inferencia directa en deploy.
 
 Con los modelos finales entrenados y validados sobre la carpeta [Prueba Desplazados](C:/Users/abel.perez/Desktop/ML/SignDetectorApp/Prueba%20Desplazados):
 
-- **MLP tratada (Solución 3: atención + recentrado): `9/10`**
-- **CNN tratada (Solución 1 real: Global Max Pooling): `4/10`**
+- **MLP tratada (atención + recentrado): `9/10`**
+- **CNN tratada (Global Max Pooling): `4/10`**
 
 Lectura rápida del resultado:
 - La MLP mejora mucho porque primero normaliza la posición del trazo (recentrado) y después clasifica.
@@ -307,7 +307,7 @@ A continuación tienes 3 casuísticas análogas para trabajar en clase mantenien
 
 ### Casuística 2: Sinopsis telegráficas y palabras clave (Global Max Pooling semántico)
 
-**Relación con teoría:** equivalente conceptual a tu Solución 1 en imágenes (Global Max Pooling real).  
+**Relación con teoría:** equivalente conceptual a tu CNN con Global Max Pooling en imágenes.  
 **Fallo base:** con TF-IDF muy disperso, textos cortos activan pocas columnas y un MLP denso puede “apagarse”.
 
 - **Red 1 (base):** MLP sobre vector TF-IDF.

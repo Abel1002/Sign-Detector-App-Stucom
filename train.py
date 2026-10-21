@@ -3,10 +3,10 @@ Entrenamiento educativo para dígitos 0..9 con:
 - Modelos clásicos: Árbol y Random Forest.
 - Redes neuronales:
   1) MLP básica.
-  2) Solución 1 REAL: CNN (MobileNetV2) + Global Max Pooling.
-  3) Solución 3: MLP con atención espacial dinámica.
+  2) CNN (MobileNetV2) + Global Max Pooling.
+  3) MLP con atención espacial dinámica + recentrado.
 
-La Solución 1 se aplica según teoría correcta:
+La variante CNN se aplica según teoría correcta:
 - El pooling global se hace sobre mapas de características convolucionales,
   no sobre píxeles crudos aplanados.
 """
@@ -38,10 +38,24 @@ RANDOM_STATE = 42
 DEFAULT_DATASET_SLUG = "karnikakapoor/digits"
 DEFAULT_MODEL_PATH = Path("modelo.joblib")
 EXPECTED_CLASSES = list(range(10))
+MLP_ATTENTION_KEY = "mlp_attention_recentered"
+CNN_GMP_KEY = "cnn_global_max_pooling"
+LEGACY_MLP_ATTENTION_KEY = "mlp_sol3_attention"
+LEGACY_CNN_GMP_KEY = "cnn_sol1_global_maxpool"
 
 
 def parse_args() -> argparse.Namespace:
-    """Lee argumentos optimizados por defecto para ejecución rápida en CPU."""
+    """
+    Define la interfaz CLI del entrenamiento.
+
+    Base metodológica:
+    - Mantiene parámetros clásicos de ingeniería de datos (fuente, tamaño, salida).
+    - Expone hiperparámetros para comparar modelos tabulares y CNN bajo el mismo pipeline.
+
+    Aporte al entrenamiento:
+    - Permite reproducibilidad y pruebas controladas (mismo script, distintos perfiles).
+    - Incluye defaults optimizados para CPU en aula.
+    """
     parser = argparse.ArgumentParser(
         description="Entrena clásicos + 3 redes (MLP básica, CNN+GMP, MLP con atención)."
     )
@@ -55,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH, help="Ruta de modelo.joblib.")
     parser.add_argument("--image-size", type=int, default=28, help="Resolución base para modelos tabulares.")
     parser.add_argument("--max-images-per-class", type=int, default=250, help="Límite por clase (0=todas).")
-    parser.add_argument("--cnn-image-size", type=int, default=64, help="Resolución para CNN Solución 1.")
+    parser.add_argument("--cnn-image-size", type=int, default=64, help="Resolución para CNN con Global Max Pooling.")
     parser.add_argument("--cnn-epochs", type=int, default=4, help="Épocas de entrenamiento de la CNN.")
     parser.add_argument("--cnn-batch-size", type=int, default=64, help="Batch size para la CNN.")
     parser.add_argument("--cnn-lr", type=float, default=2e-3, help="Learning rate de la cabeza CNN.")
@@ -63,7 +77,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def infer_digit_label(image_path: Path) -> int | None:
-    """Obtiene etiqueta 0..9 desde la carpeta ancestro del archivo."""
+    """
+    Infere la etiqueta (0..9) desde la jerarquía de carpetas del dataset.
+
+    Base metodológica:
+    - Sigue el convenio común de datasets en carpetas por clase.
+
+    Aporte al entrenamiento:
+    - Convierte estructura de archivos en supervisión (X, y) sin anotaciones extra.
+    """
     for part in reversed(image_path.parts):
         if part.isdigit() and len(part) == 1:
             return int(part)
@@ -71,7 +93,16 @@ def infer_digit_label(image_path: Path) -> int | None:
 
 
 def collect_labeled_images(dataset_root: Path, max_images_per_class: int) -> list[tuple[Path, int]]:
-    """Recorre dataset y devuelve pares (ruta, etiqueta)."""
+    """
+    Recorre el dataset y reúne muestras válidas por clase.
+
+    Base metodológica:
+    - Filtra extensiones soportadas y normaliza el muestreo por etiqueta.
+    - Aplica límite opcional por clase para controlar coste/tiempo.
+
+    Aporte al entrenamiento:
+    - Genera un conjunto balanceado y consistente para entrenar y comparar modelos.
+    """
     images_by_label: dict[int, list[Path]] = defaultdict(list)
 
     for file_path in dataset_root.rglob("*"):
@@ -97,7 +128,15 @@ def collect_labeled_images(dataset_root: Path, max_images_per_class: int) -> lis
 
 
 def preprocess_image_to_vector(image_path: Path, image_size: int) -> np.ndarray:
-    """Preprocesado tabular: gris + resize + normalización + flatten."""
+    """
+    Convierte una imagen en vector tabular para modelos de scikit-learn.
+
+    Base metodológica:
+    - Escala de grises + resize fijo + normalización [0,1] + flatten.
+
+    Aporte al entrenamiento:
+    - Crea una representación homogénea para Árbol, Bosque y MLP tabulares.
+    """
     with Image.open(image_path) as img:
         grayscale = ImageOps.grayscale(img)
         resized = grayscale.resize((image_size, image_size))
@@ -106,7 +145,16 @@ def preprocess_image_to_vector(image_path: Path, image_size: int) -> np.ndarray:
 
 
 def load_dataset(dataset_root: Path, image_size: int, max_images_per_class: int) -> tuple[np.ndarray, np.ndarray]:
-    """Carga X/y para modelos no convolucionales."""
+    """
+    Construye matrices X/y para modelos tabulares.
+
+    Base metodológica:
+    - Valida clases 0..9 presentes.
+    - Aplica el mismo preprocesado a todas las muestras.
+
+    Aporte al entrenamiento:
+    - Entrega tensores tabulares consistentes para baseline clásico y MLP.
+    """
     if not dataset_root.exists():
         raise FileNotFoundError(f"No existe la ruta del dataset: {dataset_root}")
 
@@ -131,7 +179,15 @@ def load_dataset(dataset_root: Path, image_size: int, max_images_per_class: int)
 
 
 def resolve_dataset_root(dataset_root: Path | None, dataset_slug: str) -> Path:
-    """Resuelve origen de datos (local o Kaggle)."""
+    """
+    Resuelve la fuente del dataset (local o descarga automática).
+
+    Base metodológica:
+    - Prioriza ruta explícita del usuario y usa KaggleHub como fallback reproducible.
+
+    Aporte al entrenamiento:
+    - Reduce fricción de preparación y mantiene trazabilidad del origen de datos.
+    """
     if dataset_root is not None:
         if not dataset_root.exists():
             raise FileNotFoundError(f"No existe la ruta local indicada: {dataset_root}")
@@ -147,7 +203,16 @@ def resolve_dataset_root(dataset_root: Path | None, dataset_slug: str) -> Path:
 
 
 def build_attention_features(X: np.ndarray, image_size: int) -> np.ndarray:
-    """Solución 3: recentrado + ponderación espacial dinámica sobre tinta."""
+    """
+    Genera features para MLP con recentrado + atención espacial sobre tinta.
+
+    Base metodológica:
+    - Detecta bounding box del trazo, recentra en un lienzo canónico y realza píxeles útiles
+      con una máscara de atención proporcional a la tinta.
+
+    Aporte al entrenamiento:
+    - Reduce sesgo posicional del vector aplanado y mejora robustez en dígitos desplazados.
+    """
     X_images = X.reshape(-1, image_size, image_size)
     X_weighted = np.empty_like(X_images, dtype=np.float32)
 
@@ -182,9 +247,23 @@ def build_attention_features(X: np.ndarray, image_size: int) -> np.ndarray:
 
 
 class InMemoryDigitDataset(Dataset):
-    """Precarga imágenes redimensionadas en RAM para reducir I/O en cada época."""
+    """
+    Dataset PyTorch que precarga imágenes redimensionadas en RAM.
+
+    Base metodológica:
+    - Desacopla lectura/decodificación de disco del loop de entrenamiento.
+
+    Aporte al entrenamiento:
+    - Disminuye latencia por época y acelera entrenamiento en CPU.
+    """
 
     def __init__(self, samples: list[tuple[Path, int]], cnn_image_size: int, transform) -> None:
+        """
+        Materializa en memoria la versión base de cada muestra.
+
+        Aporte:
+        - El resize ocurre una sola vez; las transformaciones estocásticas se aplican al vuelo.
+        """
         self.transform = transform
         self.data: list[tuple[Image.Image, int]] = []
 
@@ -194,9 +273,11 @@ class InMemoryDigitDataset(Dataset):
             self.data.append((rgb_small, label))
 
     def __len__(self) -> int:
+        """Devuelve número de muestras precargadas para DataLoader."""
         return len(self.data)
 
     def __getitem__(self, index: int):
+        """Aplica transformaciones y retorna par (tensor, etiqueta)."""
         image, label = self.data[index]
         if self.transform is not None:
             image = self.transform(image)
@@ -205,13 +286,20 @@ class InMemoryDigitDataset(Dataset):
 
 class MobileNetV2GlobalMaxPool(nn.Module):
     """
-    Solución 1 REAL:
+    Variante CNN:
     - Backbone convolucional MobileNetV2 preentrenado.
     - Global Max Pooling adaptativo sobre mapas convolucionales.
     - Clasificador denso final.
     """
 
     def __init__(self, num_classes: int = 10) -> None:
+        """
+        Inicializa arquitectura CNN para clasificación 0..9.
+
+        Base metodológica:
+        - Transfer learning con extractor visual preentrenado.
+        - Reducción espacial global para tolerar desplazamiento.
+        """
         super().__init__()
         base = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
         self.features = base.features
@@ -222,6 +310,12 @@ class MobileNetV2GlobalMaxPool(nn.Module):
         )
 
     def forward(self, x):
+        """
+        Ejecuta inferencia: features -> pooling global -> clasificador.
+
+        Aporte:
+        - Colapsa dimensión espacial y conserva señal semántica por canal.
+        """
         x = self.features(x)
         x = self.global_max_pool(x)
         x = torch.flatten(x, 1)
@@ -235,18 +329,33 @@ class FocalLoss(nn.Module):
     """
 
     def __init__(self, gamma: float = 2.0, label_smoothing: float = 0.05) -> None:
+        """
+        Configura penalización focal + suavizado de etiquetas.
+
+        Aporte:
+        - Prioriza ejemplos difíciles y evita sobreconfianza extrema.
+        """
         super().__init__()
         self.gamma = gamma
         self.ce = nn.CrossEntropyLoss(reduction="none", label_smoothing=label_smoothing)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Calcula la pérdida focal media del batch."""
         ce_loss = self.ce(logits, targets)
         pt = torch.exp(-ce_loss)
         return (((1.0 - pt) ** self.gamma) * ce_loss).mean()
 
 
 def build_models() -> dict[str, Any]:
-    """Construye modelos clásicos + MLPs (la CNN se entrena aparte)."""
+    """
+    Define el conjunto de modelos tabulares comparables.
+
+    Base metodológica:
+    - Incluye baseline árbol, ensamblado de bosque y MLPs con distinta capacidad.
+
+    Aporte al entrenamiento:
+    - Permite comparar rendimiento de enfoques clásicos y MLP en el mismo split.
+    """
     return {
         "decision_tree": DecisionTreeClassifier(
             criterion="gini",
@@ -276,7 +385,7 @@ def build_models() -> dict[str, Any]:
             n_iter_no_change=8,
             random_state=RANDOM_STATE,
         ),
-        "mlp_sol3_attention": MLPClassifier(
+        MLP_ATTENTION_KEY: MLPClassifier(
             hidden_layer_sizes=(256, 128),
             activation="relu",
             solver="adam",
@@ -298,12 +407,21 @@ def train_and_evaluate_tabular_models(
     y_train: np.ndarray,
     y_test: np.ndarray,
 ) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
-    """Entrena y evalúa modelos clásicos + MLP tabulares."""
+    """
+    Entrena y evalúa todos los modelos tabulares en condiciones homogéneas.
+
+    Base metodológica:
+    - Mismo split estratificado.
+    - Features base para modelos estándar y features con atención para MLP especializada.
+
+    Aporte al entrenamiento:
+    - Produce métricas comparables y reportes de diagnóstico por modelo.
+    """
     models_dict = build_models()
     metrics: dict[str, dict[str, float]] = {}
 
     for model_name, model in models_dict.items():
-        if model_name == "mlp_sol3_attention":
+        if model_name == MLP_ATTENTION_KEY:
             X_train_variant = X_attention_train
             X_test_variant = X_attention_test
             feature_variant = "attention"
@@ -319,7 +437,7 @@ def train_and_evaluate_tabular_models(
         metrics[model_name] = {"accuracy": float(accuracy), "feature_variant": feature_variant}
         print(f"Accuracy {model_name}: {accuracy:.4f}")
 
-        if model_name in {"random_forest", "mlp_sol3_attention"}:
+        if model_name in {"random_forest", MLP_ATTENTION_KEY}:
             print(f"\nReporte de clasificación ({model_name}):")
             print(classification_report(y_test, predictions, digits=4))
 
@@ -330,17 +448,26 @@ def train_and_evaluate_tabular_models(
     return models_dict, metrics
 
 
-def train_cnn_solution1(
+def train_cnn_global_max_pooling(
     labeled_images: list[tuple[Path, int]],
     cnn_image_size: int,
     cnn_epochs: int,
     cnn_batch_size: int,
     cnn_lr: float,
 ) -> tuple[dict[str, Any], dict[str, float]]:
-    """Entrena CNN Solución 1 con fine-tuning progresivo + AdamW + Focal Loss."""
+    """
+    Entrena la CNN con Global Max Pooling y fine-tuning eficiente en CPU.
+
+    Base metodológica:
+    - Transfer learning (MobileNetV2), descongelado parcial, Focal Loss y AdamW.
+    - Augmentation geométrica para robustez posicional.
+
+    Aporte al entrenamiento:
+    - Aprende representación visual desplazamiento-tolerante con coste de cómputo acotado.
+    """
     torch.set_num_threads(max(1, torch.get_num_threads()))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[7/9] Entrenando CNN Solución 1 (Modo rápido CPU + Fine-Tuning) en: {device}")
+    print(f"[7/9] Entrenando CNN con Global Max Pooling (Modo rápido CPU + Fine-Tuning) en: {device}")
 
     labels = np.array([label for _, label in labeled_images], dtype=np.int32)
     indices = np.arange(len(labeled_images))
@@ -461,7 +588,7 @@ def train_cnn_solution1(
             all_predictions.extend(predictions)
             all_targets.extend(targets.numpy().tolist())
 
-    print("\nReporte de clasificación (cnn_sol1_global_maxpool):")
+    print(f"\nReporte de clasificación ({CNN_GMP_KEY}):")
     print(classification_report(all_targets, all_predictions, digits=4))
 
     metrics = {
@@ -480,7 +607,15 @@ def train_cnn_solution1(
 
 
 def main() -> None:
-    """Ejecuta pipeline completo de entrenamiento y serialización."""
+    """
+    Orquesta el pipeline completo: carga, features, entrenamiento, evaluación y guardado.
+
+    Base metodológica:
+    - Separa flujo tabular y flujo CNN para comparar ambos paradigmas.
+
+    Aporte al entrenamiento:
+    - Produce un artefacto único (`modelo.joblib`) listo para inferencia en app.
+    """
     args = parse_args()
 
     print("[1/9] Validando parámetros...")
@@ -511,7 +646,7 @@ def main() -> None:
     print(f"Distribución por clase: {class_distribution}")
     print(f"Features base por imagen: {X_base.shape[1]}")
 
-    print("[4/9] Generando features Solución 3 (atención espacial)...")
+    print("[4/9] Generando features MLP de atención espacial + recentrado...")
     X_attention = build_attention_features(X_base, image_size=args.image_size)
     print(f"Features attention por imagen: {X_attention.shape[1]}")
 
@@ -534,7 +669,7 @@ def main() -> None:
         y_test=y_test,
     )
 
-    cnn_model_bundle, cnn_metrics = train_cnn_solution1(
+    cnn_model_bundle, cnn_metrics = train_cnn_global_max_pooling(
         labeled_images=labeled_images,
         cnn_image_size=args.cnn_image_size,
         cnn_epochs=args.cnn_epochs,
@@ -542,15 +677,18 @@ def main() -> None:
         cnn_lr=args.cnn_lr,
     )
 
-    print(f"Accuracy cnn_sol1_global_maxpool: {cnn_metrics['accuracy']:.4f}")
+    print(f"Accuracy {CNN_GMP_KEY}: {cnn_metrics['accuracy']:.4f}")
 
     model_artifact = {
         "decision_tree": tabular_models["decision_tree"],
         "random_forest": tabular_models["random_forest"],
         "mlp_basic": tabular_models["mlp_basic"],
-        "mlp_sol3_attention": tabular_models["mlp_sol3_attention"],
-        "cnn_sol1_global_maxpool_state_dict": cnn_model_bundle["state_dict"],
-        "cnn_sol1_global_maxpool_config": cnn_model_bundle["config"],
+        MLP_ATTENTION_KEY: tabular_models[MLP_ATTENTION_KEY],
+        LEGACY_MLP_ATTENTION_KEY: tabular_models[MLP_ATTENTION_KEY],
+        f"{CNN_GMP_KEY}_state_dict": cnn_model_bundle["state_dict"],
+        f"{CNN_GMP_KEY}_config": cnn_model_bundle["config"],
+        f"{LEGACY_CNN_GMP_KEY}_state_dict": cnn_model_bundle["state_dict"],
+        f"{LEGACY_CNN_GMP_KEY}_config": cnn_model_bundle["config"],
         "metadata": {
             "dataset_type": "handwritten-digits-folder",
             "dataset_source": args.dataset_slug if args.dataset_root is None else "local-path",
@@ -563,7 +701,9 @@ def main() -> None:
             "class_distribution": class_distribution,
             "metrics": {
                 **tabular_metrics,
-                "cnn_sol1_global_maxpool": cnn_metrics,
+                LEGACY_MLP_ATTENTION_KEY: tabular_metrics[MLP_ATTENTION_KEY],
+                CNN_GMP_KEY: cnn_metrics,
+                LEGACY_CNN_GMP_KEY: cnn_metrics,
             },
         },
     }
