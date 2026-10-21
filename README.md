@@ -10,6 +10,23 @@ Clasificación de números escritos (0..9) con comparación entre:
 
 ---
 
+## Índice
+
+- [1) Dataset](#1-dataset)
+- [2) Arquitectura resumida](#2-arquitectura-resumida)
+- [3) Parámetros principales usados](#3-parámetros-principales-usados)
+- [4) ¿Por qué `solver=\"adam\"` en MLP?](#4-por-qué-solveradam-en-mlp)
+- [5) Si el problema fuera texto](#5-si-el-problema-fuera-texto)
+- [6) Entrenamiento](#6-entrenamiento)
+- [7) Ejecución de la app](#7-ejecución-de-la-app)
+- [8) Render](#8-render)
+- [9) Resultados finales en `Prueba Desplazados`](#9-resultados-finales-en-prueba-desplazados)
+- [10) Posibles mejoras de CNN (ejercicio para alumnos que no vinieron el último día).](#10-posibles-mejoras-de-cnn-ejercicio-para-alumnos-que-no-vinieron-el-último-día)
+- [11) Redes neuronales de Texto/Caracteristicas.](#11-redes-neuronales-de-textocaracteristicas)
+- [12) Soluciones Alternativas a "DL"](#12-soluciones-alternativas-a-dl)
+
+---
+
 ## 1) Dataset
 
 Por defecto se descarga:
@@ -151,48 +168,7 @@ Si quieres una ruta clara de experimentación:
 
 ---
 
-## 6) Soluciones Alternativas a "DL"
-
-Estas soluciones no se centran en “hacer una red más compleja”, pero son totalmente válidas y muy útiles en proyectos reales.
-En este proyecto no fueron la vía principal porque queríamos practicar más entrenamiento de redes.
-
-### Opción 1: centrar el número antes de predecir (parche de entrada)
-
-Lógica simple:
-1. detectar dónde está el trazo,
-2. recortar el área útil,
-3. reescalar y pegar en el centro del lienzo.
-
-Ventaja:
-- mejora inmediata sin reentrenar todo el modelo.
-
-Cuándo usarla:
-- cuando necesitas una mejora rápida en inferencia con bajo coste.
-
-### Opción 2: entrenar con datos descentrados (augmentation)
-
-Lógica simple:
-- durante entrenamiento, mover/rotar/escalar el número de forma aleatoria para que la red aprenda que la posición no define la clase.
-
-Parámetros orientativos:
-- `translate` en torno a `0.20`,
-- `degrees` moderado (por ejemplo `±10`),
-- `scale` controlado para no destruir el trazo.
-
-Ventaja:
-- el modelo se vuelve robusto por aprendizaje, no por “parche” en entrada.
-
-Cuándo usarla:
-- cuando quieres robustez más general para escenarios reales.
-
-### Criterio rápido de decisión
-
-- **Poco tiempo / pocos recursos:** centrar antes de predecir.
-- **Más tiempo de entrenamiento:** augmentation para que la red aprenda invariancia posicional.
-
----
-
-## 7) Entrenamiento
+## 6) Entrenamiento
 
 ```powershell
 cd c:\Users\abel.perez\Desktop\ML\SignDetectorApp
@@ -212,7 +188,7 @@ python train.py --dataset-root "C:\ruta\dataset"
 
 ---
 
-## 8) Ejecución de la app
+## 7) Ejecución de la app
 
 ```powershell
 .venv\Scripts\python.exe -m streamlit run app.py
@@ -222,7 +198,7 @@ La app permite seleccionar cualquier combinación de 1 a 5 modelos.
 
 ---
 
-## 9) Render
+## 8) Render
 
 ### Build Command
 ```bash
@@ -238,7 +214,7 @@ Necesitas subir `modelo.joblib` para inferencia directa en deploy.
 
 ---
 
-## Resultados finales en `Prueba Desplazados`
+## 9) Resultados finales en `Prueba Desplazados`
 
 Con los modelos finales entrenados y validados sobre la carpeta [Prueba Desplazados](C:/Users/abel.perez/Desktop/ML/SignDetectorApp/Prueba%20Desplazados):
 
@@ -251,7 +227,7 @@ Lectura rápida del resultado:
 
 ---
 
-## Posibles mejoras de CNN (ejercicio para alumnos que no vinieron el último día)
+## 10) Posibles mejoras de CNN (ejercicio para alumnos que no vinieron el último día).
 
 Esta parte se deja como **ejercicio guiado** (sin código en el README) para practicar los conceptos de clase:
 
@@ -277,7 +253,7 @@ Objetivo didáctico: que el alumno compare qué cambios mejoran la robustez sin 
 
 ---
 
-## Redes neuronales de Texto/Caracteristicas.
+## 11) Redes neuronales de Texto/Caracteristicas.
 
 En el ejercicio de imágenes de [train.py](C:/Users/abel.perez/Desktop/ML/SignDetectorApp/train.py), el problema crítico del modelo base era el **sesgo posicional espacial**: la red memoriza coordenadas frecuentes y falla si el número aparece desplazado.  
 Por eso se comparó:
@@ -406,3 +382,44 @@ optimizador_adamw = torch.optim.AdamW(
 | Accuracy en desplazados | Macro F1 en clases minoritarias |
 
 Esta sección existe para guiar la transferencia conceptual entre visión y NLP en la misma práctica pedagógica.
+
+---
+
+## 12) Soluciones Alternativas a "DL"
+
+Estas soluciones no se centran en “hacer una red más compleja”, pero son totalmente válidas y muy útiles en proyectos reales.
+En este proyecto no fueron la vía principal porque queríamos practicar más entrenamiento de redes.
+
+### Opción 1: centrar el número antes de predecir (parche de entrada)
+
+Lógica simple:
+1. detectar dónde está el trazo,
+2. recortar el área útil,
+3. reescalar y pegar en el centro del lienzo.
+
+Ventaja:
+- mejora inmediata sin reentrenar todo el modelo.
+
+Cuándo usarla:
+- cuando necesitas una mejora rápida en inferencia con bajo coste.
+
+### Opción 2: entrenar con datos descentrados (augmentation)
+
+Lógica simple:
+- durante entrenamiento, mover/rotar/escalar el número de forma aleatoria para que la red aprenda que la posición no define la clase.
+
+Parámetros orientativos:
+- `translate` en torno a `0.20`,
+- `degrees` moderado (por ejemplo `±10`),
+- `scale` controlado para no destruir el trazo.
+
+Ventaja:
+- el modelo se vuelve robusto por aprendizaje, no por “parche” en entrada.
+
+Cuándo usarla:
+- cuando quieres robustez más general para escenarios reales.
+
+### Criterio rápido de decisión
+
+- **Poco tiempo / pocos recursos:** centrar antes de predecir.
+- **Más tiempo de entrenamiento:** augmentation para que la red aprenda invariancia posicional.
